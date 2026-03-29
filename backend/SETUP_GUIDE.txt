@@ -1,0 +1,171 @@
+StockSense India — Complete Setup & Deployment Guide
+=====================================================
+
+WHAT YOU HAVE
+─────────────
+stocksense/
+├── main.py                  ← Entry point (runs API + scheduler)
+├── requirements.txt         ← All Python dependencies
+├── .env.example             ← Copy to .env and fill in keys
+├── config/
+│   └── settings.py          ← All tunable parameters
+├── data/
+│   └── fetcher.py           ← Yahoo Finance + NSE scraper + news
+├── engine/
+│   ├── technical.py         ← RSI, MACD, EMA, Bollinger, patterns
+│   ├── recommender.py       ← Main scoring engine + SQLite DB
+│   └── monitor.py           ← Intraday price watcher
+├── scheduler/
+│   └── jobs.py              ← APScheduler (7PM, 6AM, 9AM, 11AM, 1:30PM, 3:45PM)
+├── api/
+│   └── main.py              ← FastAPI REST API (all endpoints)
+└── utils/
+    └── alerts.py            ← Firebase push notifications + alert log
+
+
+STEP 1 — LOCAL SETUP
+─────────────────────
+# Create virtual environment
+python3 -m venv venv
+source venv/bin/activate          # Mac/Linux
+# venv\Scripts\activate           # Windows
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Download TextBlob corpus (one-time)
+python -c "import nltk; nltk.download('punkt')"
+
+# Copy env file
+cp .env.example .env
+
+# Run locally to test
+python main.py
+
+
+STEP 2 — FIREBASE SETUP (Push Notifications)
+─────────────────────────────────────────────
+1. Go to https://console.firebase.google.com
+2. Create project → "StockSense India"
+3. Add Android/iOS app
+4. Go to Project Settings → Cloud Messaging
+5. Copy "Server Key" → paste into .env as FCM_SERVER_KEY
+6. In your React Native app, install @react-native-firebase/messaging
+7. Call messaging().getToken() to get device token
+8. Save that token → paste into .env as FCM_DEVICE_TOKEN
+
+Full Firebase React Native setup:
+https://rnfirebase.io/messaging/usage
+
+
+STEP 3 — DEPLOY TO RENDER (Free Tier)
+───────────────────────────────────────
+Render gives you a free Python web service — perfect for personal use.
+
+1. Push this folder to a private GitHub repo:
+   git init
+   git add .
+   git commit -m "StockSense India v1"
+   git remote add origin https://github.com/YOUR_USERNAME/stocksense
+   git push -u origin main
+
+2. Go to https://render.com → New → Web Service
+3. Connect your GitHub repo
+4. Settings:
+   - Build Command:  pip install -r requirements.txt
+   - Start Command:  python main.py
+   - Instance Type:  Free
+   - Region:         Singapore (closest to India)
+
+5. Add Environment Variables in Render dashboard:
+   FCM_SERVER_KEY      = your_key
+   FCM_DEVICE_TOKEN    = your_token
+   LOG_LEVEL           = INFO
+
+6. Deploy! Your API will be at:
+   https://stocksense-india.onrender.com
+
+Note: Free tier on Render sleeps after 15 mins of inactivity.
+Use a free uptime monitor like https://uptimerobot.com to ping
+/health every 10 mins to keep it awake.
+
+
+STEP 4 — CONNECT PWA TO BACKEND
+─────────────────────────────────
+In StockSense_India.html, update the API_BASE constant at the top:
+
+  const API_BASE = "https://stocksense-india.onrender.com";
+
+The PWA will then fetch live picks, portfolio, and alerts from your backend.
+
+
+STEP 5 — VERIFY EVERYTHING WORKS
+──────────────────────────────────
+# Test API locally
+curl http://localhost:8000/health
+curl http://localhost:8000/market/status
+curl http://localhost:8000/market/global
+curl http://localhost:8000/picks/today
+
+# Manually trigger engine to test picks generation:
+curl -X POST http://localhost:8000/engine/run?mode=eod
+
+# Add a portfolio holding:
+curl -X POST http://localhost:8000/portfolio \
+  -H "Content-Type: application/json" \
+  -d '{"ticker":"HDFCBANK","name":"HDFC Bank","exchange":"NSE","quantity":10,"avg_price":1500}'
+
+# View portfolio:
+curl http://localhost:8000/portfolio
+
+
+API ENDPOINTS REFERENCE
+────────────────────────
+GET  /health                     Health check
+GET  /market/status              Is market open right now?
+GET  /market/global              Global indices + FII/DII
+GET  /picks/today                Today's buy/sell picks
+GET  /picks/history?limit=30     Historical picks + performance stats
+PATCH /picks/{id}/status         Update pick status manually
+GET  /portfolio                  Your holdings + live P&L
+POST /portfolio                  Add a new holding
+PUT  /portfolio/{id}             Update an existing holding
+DELETE /portfolio/{id}           Remove a holding
+GET  /alerts?limit=20            Recent alerts log
+POST /engine/run?mode=eod        Manually trigger engine
+
+
+TUNING THE ENGINE (config/settings.py)
+──────────────────────────────────────
+STOPLOSS_PCT = 1.5               Change your default stop-loss %
+TARGET_PCT_MIN = 3.0             Minimum move % to consider
+TARGET_PCT_MAX = 6.0             Maximum move % target
+MAX_PICKS = 5                    Max picks per day
+MIN_RR_RATIO = 2.0               Minimum reward:risk ratio
+RSI_OVERSOLD = 35                Adjust RSI thresholds
+VOLUME_SPIKE_MULT = 1.8          Volume spike multiplier
+
+WEIGHTS = {                      Adjust scoring weights (must sum to 1)
+    "technical":   0.35,
+    "pattern":     0.30,
+    "sentiment":   0.20,
+    "fundamental": 0.15,
+}
+
+
+IMPORTANT DISCLAIMERS
+──────────────────────
+• This is a personal decision-support tool. Not SEBI-registered.
+• Not financial advice. All trades are your own responsibility.
+• Yahoo Finance data may have delays. Always verify before trading.
+• Past pick performance does not guarantee future results.
+• Never invest more than you can afford to lose.
+
+
+QUESTIONS OR ISSUES?
+─────────────────────
+Share any questions with Claude and paste the error message shown.
+The most common issues are:
+1. yfinance rate limiting — add time.sleep() between calls in fetcher.py
+2. NSE 403 errors — NSE headers change; update NSE_HEADERS in fetcher.py
+3. FCM token expired — get a fresh token from your React Native app
