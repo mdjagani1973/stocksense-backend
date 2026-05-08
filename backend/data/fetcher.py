@@ -1,7 +1,6 @@
 """
-StockSense India — data/fetcher.py
-FIXED: Uses stooq.com for OHLCV price data (Yahoo Finance blocks Render server IPs).
-Keeps yfinance for fundamental data (P/E, market cap etc) which still works.
+StockSense India — data/fetcher.py v3.0
+FIXED: Robust stooq.com parsing, correct index symbols, hardcoded fallback list.
 """
 
 import io
@@ -11,7 +10,6 @@ import requests
 import pandas as pd
 import yfinance as yf
 from datetime import datetime, timedelta
-from bs4 import BeautifulSoup
 from textblob import TextBlob
 import xml.etree.ElementTree as ET
 from config.settings import (
@@ -31,203 +29,191 @@ NSE_HEADERS = {
 
 STOOQ_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
 }
 
+# Hardcoded quality stocks — used when screen_universe() returns too few results
+QUALITY_FALLBACK_UNIVERSE = [
+    "HDFCBANK.NS", "INFY.NS", "TCS.NS", "RELIANCE.NS", "ICICIBANK.NS",
+    "BHARTIARTL.NS", "AXISBANK.NS", "KOTAKBANK.NS", "SBIN.NS", "LT.NS",
+    "WIPRO.NS", "HCLTECH.NS", "SUNPHARMA.NS", "TITAN.NS", "TATAMOTORS.NS",
+    "MARUTI.NS", "BAJFINANCE.NS", "TECHM.NS", "DRREDDY.NS", "CIPLA.NS",
+    "DIVISLAB.NS", "ASIANPAINT.NS", "HINDUNILVR.NS", "ITC.NS", "NTPC.NS",
+    "POWERGRID.NS", "COALINDIA.NS", "ONGC.NS", "BPCL.NS", "GRASIM.NS",
+]
 
-# ── OHLCV via stooq.com (works from Render, no auth needed) ──────────────────
 
-def ticker_to_stooq(ticker: str) -> str:
-    """Convert NSE ticker to stooq format. HDFCBANK.NS -> hdfcbank.ns"""
-    clean = ticker.replace(".NS", "").replace(".BO", "").lower()
-    return clean + ".ns"
-
-
-def fetch_ohlcv(ticker: str, period: str = "3mo", interval: str = "1d") -> pd.DataFrame:
-    """
-    Fetch OHLCV data from stooq.com.
-    stooq.com is free, no API key, works from any server.
-    """
-    stooq_sym = ticker_to_stooq(ticker)
-    url = f"https://stooq.com/q/d/l/?s={stooq_sym}&i=d"
+def fetch_stooq_csv(symbol: str, days: int = 90) -> pd.DataFrame:
+    """Fetch historical data from stooq.com with robust CSV parsing."""
+    url = "https://stooq.com/q/d/l/?s=" + symbol + "&i=d"
     try:
-        resp = requests.get(url, headers=STOOQ_HEADERS, timeout=10)
-        if resp.status_code != 200 or len(resp.text) < 50:
-            logger.warning(f"stooq empty response for {ticker}")
-            return _fetch_ohlcv_yfinance(ticker, period, interval)
+        resp = requests.get(url, headers=STOOQ_HEADERS, timeout=12)
+        if resp.status_code != 200 or len(resp.text) < 30:
+            return pd.DataFrame()
 
-        df = pd.read_csv(io.StringIO(resp.text), parse_dates=["Date"])
-        df = df.rename(columns={"Date":"Date","Open":"Open","High":"High",
-                                  "Low":"Low","Close":"Close","Volume":"Volume"})
-        df = df.set_index("Date").sort_index()
+        text = resp.text.strip()
+        lines = text.split('\n')
 
-        # Filter to requested period
-        days = {"1mo": 30, "3mo": 90, "6mo": 180, "1y": 365}.get(period, 90)
+        # Find the CSV header line (contains "Date")
+        header_idx = 0
+        for i, line in enumerate(lines):
+            if 'Date' in line or 'date' in line.lower():
+                header_idx = i
+                break
+
+        clean_text = '\n'.join(lines[header_idx:])
+        df = pd.read_csv(io.StringIO(clean_text), on_bad_lines='skip', engine='python')
+        df.columns = [c.strip().title() for c in df.columns]
+
+        if 'Date' not in df.columns or 'Close' not in df.columns:
+            return pd.DataFrame()
+
+        df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+        df = df.dropna(subset=['Date']).set_index('Date').sort_index()
+
         cutoff = datetime.now() - timedelta(days=days)
         df = df[df.index >= pd.Timestamp(cutoff)]
 
-        if df.empty:
-            return _fetch_ohlcv_yfinance(ticker, period, interval)
+        for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
 
-        logger.info(f"stooq OK: {ticker} — {len(df)} rows")
-        return df
+        return df.dropna(subset=['Close'])
 
     except Exception as e:
-        logger.warning(f"stooq failed for {ticker}: {e} — trying yfinance")
-        return _fetch_ohlcv_yfinance(ticker, period, interval)
-
-
-def _fetch_ohlcv_yfinance(ticker: str, period: str = "3mo", interval: str = "1d") -> pd.DataFrame:
-    """Fallback: yfinance (may be blocked on some servers)."""
-    try:
-        df = yf.download(ticker, period=period, interval=interval,
-                         progress=False, auto_adjust=True)
-        return df
-    except Exception as e:
-        logger.error(f"yfinance also failed for {ticker}: {e}")
+        logger.debug("stooq " + symbol + ": " + str(e))
         return pd.DataFrame()
 
 
-def fetch_current_price(ticker: str) -> dict:
-    """
-    Fetch latest price for a ticker.
-    Uses stooq for price, yfinance for metadata (name, sector, market cap).
-    """
-    stooq_sym = ticker_to_stooq(ticker)
-    url = f"https://stooq.com/q/d/l/?s={stooq_sym}&i=d"
+def fetch_ohlcv(ticker: str, period: str = "3mo", interval: str = "1d") -> pd.DataFrame:
+    """OHLCV — stooq primary, yfinance fallback."""
+    days = {"1mo": 30, "3mo": 90, "6mo": 180, "1y": 365}.get(period, 90)
+    clean = ticker.replace(".NS", "").replace(".BO", "").lower()
 
-    price = None
-    prev_close = None
+    df = fetch_stooq_csv(clean + ".ns", days)
+    if not df.empty and len(df) >= 10:
+        logger.info("stooq OK: " + ticker + " " + str(len(df)) + " rows")
+        return df
 
     try:
-        resp = requests.get(url, headers=STOOQ_HEADERS, timeout=8)
-        if resp.status_code == 200 and len(resp.text) > 50:
-            df = pd.read_csv(io.StringIO(resp.text))
-            if not df.empty:
-                latest = df.iloc[-1]
-                price = float(latest.get("Close", 0))
-                if len(df) >= 2:
-                    prev_close = float(df.iloc[-2].get("Close", price))
-                else:
-                    prev_close = price
+        df = yf.download(ticker, period=period, interval=interval,
+                         progress=False, auto_adjust=True)
+        if not df.empty:
+            return df
     except Exception as e:
-        logger.warning(f"stooq price fetch failed for {ticker}: {e}")
+        logger.warning("yfinance fallback " + ticker + ": " + str(e))
 
-    # Get metadata from yfinance (less frequent, more tolerant of blocking)
-    meta = {}
+    return pd.DataFrame()
+
+
+def fetch_current_price(ticker: str) -> dict:
+    """Current price — stooq primary, yfinance fallback."""
+    clean = ticker.replace(".NS", "").replace(".BO", "").lower()
+
+    price, prev_close = None, None
+    df = fetch_stooq_csv(clean + ".ns", days=10)
+    if not df.empty and 'Close' in df.columns and len(df) >= 1:
+        price = float(df['Close'].iloc[-1])
+        prev_close = float(df['Close'].iloc[-2]) if len(df) >= 2 else price
+
+    meta = {"name": ticker.replace(".NS", ""), "sector": "Unknown",
+            "market_cap": 0, "52w_high": 0, "52w_low": 0, "avg_volume": 0}
+
     try:
         info = yf.Ticker(ticker).info
-        meta = {
-            "name":       info.get("longName") or info.get("shortName", ticker),
-            "sector":     info.get("sector", "Unknown"),
-            "market_cap": info.get("marketCap", 0),
-            "pe_ratio":   info.get("trailingPE", None),
-            "52w_high":   info.get("fiftyTwoWeekHigh", 0),
-            "52w_low":    info.get("fiftyTwoWeekLow", 0),
-            "avg_volume": info.get("averageVolume", 0),
-        }
-        # If stooq failed, try yfinance price
-        if not price:
+        if not price or price <= 0:
             price = info.get("currentPrice") or info.get("regularMarketPrice", 0)
             prev_close = info.get("previousClose", price)
+        meta["name"]       = info.get("longName") or info.get("shortName", meta["name"])
+        meta["sector"]     = info.get("sector", "Unknown")
+        meta["market_cap"] = info.get("marketCap", 0) or 0
+        meta["52w_high"]   = info.get("fiftyTwoWeekHigh", 0) or 0
+        meta["52w_low"]    = info.get("fiftyTwoWeekLow", 0) or 0
+        meta["avg_volume"] = info.get("averageVolume", 0) or 0
     except Exception as e:
-        logger.warning(f"yfinance metadata failed for {ticker}: {e}")
+        logger.debug("yfinance meta " + ticker + ": " + str(e))
 
-    if not price:
+    if not price or price <= 0:
         return {}
 
-    change_pct = ((price - prev_close) / prev_close * 100) if prev_close else 0
-
+    chg = ((price - prev_close) / prev_close * 100) if prev_close and prev_close > 0 else 0
     return {
-        "ticker":      ticker,
-        "price":       price,
-        "prev_close":  prev_close or price,
-        "change_pct":  round(change_pct, 2),
-        "market_cap":  meta.get("market_cap", 0),
-        "pe_ratio":    meta.get("pe_ratio"),
-        "52w_high":    meta.get("52w_high", 0),
-        "52w_low":     meta.get("52w_low", 0),
-        "name":        meta.get("name", ticker.replace(".NS", "")),
-        "sector":      meta.get("sector", "Unknown"),
-        "avg_volume":  meta.get("avg_volume", 0),
-        "volume":      meta.get("avg_volume", 0),
+        "ticker": ticker, "price": price, "prev_close": prev_close or price,
+        "change_pct": round(chg, 2), "market_cap": meta["market_cap"],
+        "pe_ratio": None, "52w_high": meta["52w_high"], "52w_low": meta["52w_low"],
+        "name": meta["name"], "sector": meta["sector"],
+        "avg_volume": meta["avg_volume"], "volume": meta["avg_volume"],
     }
 
 
 def fetch_bulk_prices(tickers: list) -> dict:
-    """Fetch latest close prices for multiple tickers via stooq."""
+    """Bulk price fetch via stooq."""
     result = {}
     for ticker in tickers:
-        try:
-            stooq_sym = ticker_to_stooq(ticker)
-            url = f"https://stooq.com/q/d/l/?s={stooq_sym}&i=d"
-            resp = requests.get(url, headers=STOOQ_HEADERS, timeout=6)
-            if resp.status_code == 200 and len(resp.text) > 50:
-                df = pd.read_csv(io.StringIO(resp.text))
-                result[ticker] = float(df.iloc[-1]["Close"]) if not df.empty else None
-            else:
-                result[ticker] = None
-        except Exception:
-            result[ticker] = None
-        time.sleep(0.1)  # be polite
+        clean = ticker.replace(".NS", "").replace(".BO", "").lower()
+        df = fetch_stooq_csv(clean + ".ns", days=5)
+        result[ticker] = float(df['Close'].iloc[-1]) if not df.empty else None
+        time.sleep(0.1)
     return result
 
-
-# ── Global Market Context ─────────────────────────────────────────────────────
 
 def fetch_global_context() -> dict:
-    """
-    Fetch US indices and macro data.
-    Uses stooq for indices — works reliably from Render.
-    """
-    indices = {
-        "sp500":  "^spx",    # S&P 500 on stooq
-        "nasdaq": "^ndx",    # Nasdaq 100
-        "nifty":  "^nse",    # Nifty 50
-        "vix":    "^vix",    # VIX
-    }
+    """US indices, Nifty, crude, USD/INR."""
     result = {}
-    for name, sym in indices.items():
-        url = f"https://stooq.com/q/d/l/?s={sym}&i=d"
-        try:
-            resp = requests.get(url, headers=STOOQ_HEADERS, timeout=8)
-            if resp.status_code == 200 and len(resp.text) > 50:
-                df = pd.read_csv(io.StringIO(resp.text))
-                if len(df) >= 2:
-                    last = float(df.iloc[-1]["Close"])
-                    prev = float(df.iloc[-2]["Close"])
-                    chg  = ((last - prev) / prev * 100) if prev else 0
-                    result[name] = {
-                        "value":      round(last, 2),
-                        "change_pct": round(chg, 2),
-                        "direction":  "up" if chg >= 0 else "down",
-                    }
-        except Exception as e:
-            logger.warning(f"stooq global {sym}: {e}")
 
-    # Crude oil and USD/INR via yfinance (usually works for these)
-    for name, sym in [("crude", "CL=F"), ("usdinr", "USDINR=X")]:
-        try:
-            df = yf.download(sym, period="5d", interval="1d",
-                             progress=False, auto_adjust=True)
-            if len(df) >= 2:
-                last = float(df["Close"].iloc[-1])
-                prev = float(df["Close"].iloc[-2])
-                chg  = ((last - prev) / prev * 100) if prev else 0
-                result[name] = {
-                    "value":      round(last, 2),
-                    "change_pct": round(chg, 2),
-                    "direction":  "up" if chg >= 0 else "down",
-                }
-        except Exception as e:
-            logger.warning(f"yfinance {sym}: {e}")
+    stooq_indices = {
+        "sp500":  "^spx",
+        "nasdaq": "^ndx",
+        "nifty":  "^nse",
+        "vix":    "^vix",
+    }
 
+    for name, sym in stooq_indices.items():
+        df = fetch_stooq_csv(sym, days=5)
+        if not df.empty and len(df) >= 2 and 'Close' in df.columns:
+            last = float(df['Close'].iloc[-1])
+            prev = float(df['Close'].iloc[-2])
+            chg  = ((last - prev) / prev * 100) if prev else 0
+            result[name] = {"value": round(last, 2), "change_pct": round(chg, 2),
+                            "direction": "up" if chg >= 0 else "down"}
+
+    # Crude via stooq
+    df_crude = fetch_stooq_csv("cl.f", days=5)
+    if not df_crude.empty and len(df_crude) >= 2:
+        last = float(df_crude['Close'].iloc[-1])
+        prev = float(df_crude['Close'].iloc[-2])
+        chg  = ((last - prev) / prev * 100) if prev else 0
+        result["crude"] = {"value": round(last, 2), "change_pct": round(chg, 2),
+                           "direction": "up" if chg >= 0 else "down"}
+
+    # USD/INR via open.er-api (free, CORS-enabled, works from any server)
+    try:
+        r = requests.get("https://open.er-api.com/v6/latest/USD", timeout=6,
+                         headers={"User-Agent": "Mozilla/5.0"})
+        if r.status_code == 200:
+            inr = r.json().get("rates", {}).get("INR")
+            if inr:
+                result["usdinr"] = {"value": round(inr, 2), "change_pct": 0, "direction": "flat"}
+    except Exception as e:
+        logger.warning("open.er-api: " + str(e))
+
+    # Fallback USD/INR via stooq
+    if "usdinr" not in result:
+        for sym in ["usd/inr", "usdinr"]:
+            df_inr = fetch_stooq_csv(sym, days=5)
+            if not df_inr.empty and 'Close' in df_inr.columns:
+                val = float(df_inr['Close'].iloc[-1])
+                if val < 10:
+                    val = round(1 / val, 2)
+                result["usdinr"] = {"value": val, "change_pct": 0, "direction": "flat"}
+                break
+
+    logger.info("Global context: " + str(list(result.keys())))
     return result
 
 
-# ── FII / DII Data ────────────────────────────────────────────────────────────
-
 def fetch_fii_dii() -> dict:
-    """Fetch FII/DII data from NSE."""
+    """FII/DII from NSE."""
     url = "https://www.nseindia.com/api/fiidiiTradeReact"
     try:
         session = requests.Session()
@@ -245,20 +231,17 @@ def fetch_fii_dii() -> dict:
                 "date":        latest.get("date", ""),
             }
     except Exception as e:
-        logger.error(f"fetch_fii_dii: {e}")
+        logger.error("fetch_fii_dii: " + str(e))
     return {"fii_net_cr": 0, "dii_net_cr": 0, "date": ""}
 
 
-# ── News Sentiment ────────────────────────────────────────────────────────────
-
 def fetch_news_sentiment(symbol: str) -> dict:
-    """Fetch Google News RSS and compute sentiment score."""
+    """Google News RSS sentiment."""
     clean = symbol.replace(".NS", "").replace(".BO", "")
     url   = GNEWS_RSS.format(symbol=clean)
     scores, headlines = [], []
     try:
-        resp = requests.get(url, timeout=8,
-                            headers={"User-Agent": "Mozilla/5.0"})
+        resp = requests.get(url, timeout=8, headers={"User-Agent": "Mozilla/5.0"})
         root = ET.fromstring(resp.content)
         for item in root.findall(".//item"):
             title = item.findtext("title", "")
@@ -266,22 +249,20 @@ def fetch_news_sentiment(symbol: str) -> dict:
                 headlines.append(title)
                 scores.append(TextBlob(title).sentiment.polarity)
     except Exception as e:
-        logger.warning(f"news sentiment {clean}: {e}")
+        logger.debug("news " + clean + ": " + str(e))
 
     if not scores:
         return {"score": 0.0, "label": "neutral", "count": 0, "headlines": []}
 
-    avg = sum(scores) / len(scores)
+    avg   = sum(scores) / len(scores)
     label = ("positive" if avg > SENTIMENT_POSITIVE else
              "negative" if avg < SENTIMENT_NEGATIVE else "neutral")
     return {"score": round(avg, 4), "label": label,
             "count": len(scores), "headlines": headlines[:5]}
 
 
-# ── Delivery % from NSE ───────────────────────────────────────────────────────
-
 def fetch_nse_delivery_pct(symbol: str) -> float:
-    """Fetch delivery percentage from NSE."""
+    """NSE delivery percentage."""
     clean = symbol.replace(".NS", "").replace(".BO", "")
     try:
         session = requests.Session()
@@ -290,40 +271,35 @@ def fetch_nse_delivery_pct(symbol: str) -> float:
         resp = session.get(NSE_QUOTE_URL + clean, headers=NSE_HEADERS, timeout=8)
         if resp.status_code == 200:
             return float(resp.json().get("deliveryToTradedQuantity", 0))
-    except Exception as e:
-        logger.warning(f"delivery_pct {clean}: {e}")
+    except Exception:
+        pass
     return 0.0
 
 
-# ── Universe Screening ────────────────────────────────────────────────────────
-
 def screen_universe() -> list:
     """
-    Quick filter on STOCK_UNIVERSE using stooq for price/volume data.
-    Returns tickers that pass basic liquidity checks.
+    Screen stocks via stooq. Falls back to QUALITY_FALLBACK_UNIVERSE
+    if fewer than 10 stocks pass — guarantees engine always has stocks.
     """
     passing = []
     for ticker in STOCK_UNIVERSE:
         try:
-            stooq_sym = ticker_to_stooq(ticker)
-            url = f"https://stooq.com/q/d/l/?s={stooq_sym}&i=d"
-            resp = requests.get(url, headers=STOOQ_HEADERS, timeout=6)
-            if resp.status_code != 200 or len(resp.text) < 50:
-                continue
-            df = pd.read_csv(io.StringIO(resp.text))
-            if df.empty or len(df) < 5:
-                continue
-            # Basic check: has recent data and reasonable volume
-            latest_close = float(df.iloc[-1]["Close"])
-            avg_vol = float(df["Volume"].tail(20).mean()) if "Volume" in df.columns else 0
-
-            # Accept if volume check passes OR if volume data not available
-            if latest_close > 0 and (avg_vol >= MIN_AVG_VOLUME or avg_vol == 0):
-                passing.append(ticker)
+            clean = ticker.replace(".NS", "").replace(".BO", "").lower()
+            df = fetch_stooq_csv(clean + ".ns", days=30)
+            if not df.empty and len(df) >= 5 and 'Close' in df.columns:
+                if float(df['Close'].iloc[-1]) > 0:
+                    passing.append(ticker)
             time.sleep(0.05)
-        except Exception as e:
-            logger.debug(f"screen {ticker}: {e}")
+        except Exception:
             continue
 
-    logger.info(f"Universe screened: {len(passing)}/{len(STOCK_UNIVERSE)} passed")
+    logger.info("Universe screened: " + str(len(passing)) + "/" + str(len(STOCK_UNIVERSE)) + " passed")
+
+    if len(passing) < 10:
+        logger.warning(
+            "Only " + str(len(passing)) + " stocks screened — "
+            "using QUALITY_FALLBACK_UNIVERSE (" + str(len(QUALITY_FALLBACK_UNIVERSE)) + " stocks)"
+        )
+        return QUALITY_FALLBACK_UNIVERSE
+
     return passing
