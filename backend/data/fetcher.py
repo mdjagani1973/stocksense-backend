@@ -127,6 +127,15 @@ def get_trading_dates(n: int = 30) -> list:
         d -= timedelta(days=1)
     return dates
 
+def _safe_float(val, default=0.0):
+    """Safely convert pandas scalar or Series to float."""
+    try:
+        if hasattr(val, 'iloc'): return float(val.iloc[0])
+        if hasattr(val, 'item'): return float(val.item())
+        return float(val)
+    except Exception:
+        return default
+
 def fetch_ohlcv(ticker: str, period: str = "3mo", interval: str = "1d") -> pd.DataFrame:
     """Build OHLCV from bhavcopy. Fetches last 30 trading days."""
     symbol = ticker.replace(".NS","").replace(".BO","").strip().upper()
@@ -140,14 +149,19 @@ def fetch_ohlcv(ticker: str, period: str = "3mo", interval: str = "1d") -> pd.Da
         row = df[df['SYMBOL'] == symbol]
         if not row.empty:
             r = row.iloc[0]
-            rows.append({
-                'Date':   pd.Timestamp(r['DATE']),
-                'Open':   float(r['OPEN']),
-                'High':   float(r['HIGH']),
-                'Low':    float(r['LOW']),
-                'Close':  float(r['CLOSE']),
-                'Volume': float(r.get('VOLUME', 0)),
-            })
+            try:
+                vol = r['VOLUME'] if 'VOLUME' in r.index else 0
+                rows.append({
+                    'Date':   pd.Timestamp(r['DATE']),
+                    'Open':   _safe_float(r['OPEN']) if not hasattr(r['OPEN'], '__len__') else float(r['OPEN'].iloc[0]),
+                    'High':   _safe_float(r['HIGH']) if not hasattr(r['HIGH'], '__len__') else float(r['HIGH'].iloc[0]),
+                    'Low':    _safe_float(r['LOW'])  if not hasattr(r['LOW'],  '__len__') else float(r['LOW'].iloc[0]),
+                    'Close':  _safe_float(r['CLOSE']) if not hasattr(r['CLOSE'], '__len__') else float(r['CLOSE'].iloc[0]),
+                    'Volume': float(vol) if not hasattr(vol, '__len__') else float(vol.iloc[0]) if len(vol)>0 else 0,
+                })
+            except Exception as row_err:
+                logger.debug(f"Row parse error: {row_err}")
+                continue
         time.sleep(0.1)
 
     if not rows:
@@ -169,17 +183,17 @@ def fetch_current_price(ticker: str) -> dict:
             r = row.iloc[0]
             return {
                 "ticker":     ticker,
-                "price":      float(r['CLOSE']),
-                "prev_close": float(r['OPEN']),
-                "change_pct": round((float(r['CLOSE'])-float(r['OPEN']))/float(r['OPEN'])*100, 2) if float(r['OPEN'])>0 else 0,
+                "price":      _safe_float(r['CLOSE']),
+                "prev_close": _safe_float(r['OPEN']),
+                "change_pct": round((_safe_float(r['CLOSE'])-_safe_float(r['OPEN']))/_safe_float(r['OPEN'])*100, 2) if _safe_float(r['OPEN'])>0 else 0,
                 "market_cap": 0,
                 "pe_ratio":   None,
                 "52w_high":   0,
                 "52w_low":    0,
                 "name":       symbol,
                 "sector":     "NSE",
-                "avg_volume": float(r.get('VOLUME',0)),
-                "volume":     float(r.get('VOLUME',0)),
+                "avg_volume": _safe_float(r.get("VOLUME", 0)),
+                "volume":     _safe_float(r.get("VOLUME", 0)),
             }
         time.sleep(0.1)
     return {}
@@ -194,7 +208,7 @@ def fetch_bulk_prices(tickers: list) -> dict:
         for _, row in df.iterrows():
             sym = str(row['SYMBOL'])
             if sym in symbols and result[symbols[sym]] is None:
-                result[symbols[sym]] = float(row['CLOSE'])
+                result[symbols[sym]] = _safe_float(row['CLOSE'])
         if all(v is not None for v in result.values()):
             break
         time.sleep(0.2)
