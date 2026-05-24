@@ -18,6 +18,15 @@ from config.settings import (
 logger = logging.getLogger("stocksense.technical")
 
 
+def _value_or_default(value, default):
+    try:
+        if pd.isna(value):
+            return default
+    except Exception:
+        pass
+    return float(value)
+
+
 # ── Compute All Indicators ────────────────────────────────────────────────────
 
 def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
@@ -39,15 +48,20 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["rsi"] = ta.momentum.RSIIndicator(close=close, window=14).rsi()
 
     # ── MACD ─────────────────────────────────────────────────────────────────
-    macd_obj        = ta.trend.MACD(close=close, window_slow=26,
-                                     window_fast=12, window_sign=MACD_SIGNAL_WINDOW)
-    df["macd"]      = macd_obj.macd()
-    df["macd_sig"]  = macd_obj.macd_signal()
-    df["macd_hist"] = macd_obj.macd_diff()
+    fast_span = min(12, len(close))
+    slow_span = min(26, len(close))
+    signal_span = min(MACD_SIGNAL_WINDOW, len(close))
+    fast_ema = close.ewm(span=fast_span, adjust=False, min_periods=1).mean()
+    slow_ema = close.ewm(span=slow_span, adjust=False, min_periods=1).mean()
+    df["macd"] = fast_ema - slow_ema
+    df["macd_sig"] = df["macd"].ewm(span=signal_span, adjust=False, min_periods=1).mean()
+    df["macd_hist"] = df["macd"] - df["macd_sig"]
 
     # ── EMA ──────────────────────────────────────────────────────────────────
-    df[f"ema{EMA_SHORT}"] = ta.trend.EMAIndicator(close=close, window=EMA_SHORT).ema_indicator()
-    df[f"ema{EMA_LONG}"]  = ta.trend.EMAIndicator(close=close, window=EMA_LONG).ema_indicator()
+    ema_short_window = min(EMA_SHORT, len(close))
+    ema_long_window = min(EMA_LONG, len(close))
+    df[f"ema{EMA_SHORT}"] = close.ewm(span=ema_short_window, adjust=False, min_periods=1).mean()
+    df[f"ema{EMA_LONG}"] = close.ewm(span=ema_long_window, adjust=False, min_periods=1).mean()
 
     # ── Bollinger Bands ───────────────────────────────────────────────────────
     bb              = ta.volatility.BollingerBands(close=close,
@@ -78,8 +92,9 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
                                                 close=close, window=14).average_true_range()
 
     # ── Price position within 52-week range ───────────────────────────────────
-    df["52w_high"] = close.rolling(252).max()
-    df["52w_low"]  = close.rolling(252).min()
+    range_window = min(252, len(close))
+    df["52w_high"] = close.rolling(range_window, min_periods=1).max()
+    df["52w_low"]  = close.rolling(range_window, min_periods=1).min()
     df["52w_pos"]  = (close - df["52w_low"]) / (df["52w_high"] - df["52w_low"] + 1e-9)
 
     return df
@@ -112,10 +127,10 @@ def detect_signals(df: pd.DataFrame) -> dict:
     score_buy    = 0.0
     score_sell   = 0.0
 
-    close = float(row["Close"])
+    close = _value_or_default(row["Close"], 0.0)
 
     # ── RSI Signal ────────────────────────────────────────────────────────────
-    rsi = float(row.get("rsi", 50))
+    rsi = _value_or_default(row.get("rsi", 50), 50.0)
     if rsi < RSI_OVERSOLD:
         signals_buy.append(f"RSI oversold at {rsi:.1f}")
         score_buy += 0.25
@@ -130,10 +145,10 @@ def detect_signals(df: pd.DataFrame) -> dict:
         score_sell += 0.12
 
     # ── MACD Signal ───────────────────────────────────────────────────────────
-    macd      = float(row.get("macd", 0))
-    macd_sig  = float(row.get("macd_sig", 0))
-    prev_macd = float(prev.get("macd", 0))
-    prev_sig  = float(prev.get("macd_sig", 0))
+    macd      = _value_or_default(row.get("macd", 0), 0.0)
+    macd_sig  = _value_or_default(row.get("macd_sig", 0), 0.0)
+    prev_macd = _value_or_default(prev.get("macd", 0), 0.0)
+    prev_sig  = _value_or_default(prev.get("macd_sig", 0), 0.0)
 
     bullish_cross = (prev_macd <= prev_sig) and (macd > macd_sig)
     bearish_cross = (prev_macd >= prev_sig) and (macd < macd_sig)
@@ -153,8 +168,8 @@ def detect_signals(df: pd.DataFrame) -> dict:
         score_sell += 0.10
 
     # ── EMA Trend Signal ──────────────────────────────────────────────────────
-    ema20 = float(row.get(f"ema{EMA_SHORT}", close))
-    ema50 = float(row.get(f"ema{EMA_LONG}", close))
+    ema20 = _value_or_default(row.get(f"ema{EMA_SHORT}", close), close)
+    ema50 = _value_or_default(row.get(f"ema{EMA_LONG}", close), close)
 
     if close > ema20 > ema50:
         signals_buy.append(f"Price above EMA{EMA_SHORT} & EMA{EMA_LONG} — uptrend")
@@ -167,9 +182,9 @@ def detect_signals(df: pd.DataFrame) -> dict:
         score_sell += 0.15
 
     # ── Bollinger Band Signal ─────────────────────────────────────────────────
-    bb_pct   = float(row.get("bb_pct", 0.5))
-    bb_lower = float(row.get("bb_lower", close))
-    bb_upper = float(row.get("bb_upper", close))
+    bb_pct   = _value_or_default(row.get("bb_pct", 0.5), 0.5)
+    bb_lower = _value_or_default(row.get("bb_lower", close), close)
+    bb_upper = _value_or_default(row.get("bb_upper", close), close)
 
     if bb_pct < 0.10:
         signals_buy.append(f"Price near lower Bollinger Band — potential reversal")
@@ -179,7 +194,7 @@ def detect_signals(df: pd.DataFrame) -> dict:
         score_sell += 0.15
 
     # ── Volume Spike ──────────────────────────────────────────────────────────
-    vol_ratio = float(row.get("vol_ratio", 1.0))
+    vol_ratio = _value_or_default(row.get("vol_ratio", 1.0), 1.0)
     if vol_ratio >= VOLUME_SPIKE_MULT:
         spike_str = f"Volume spike {vol_ratio:.1f}× average"
         signals_buy.append(spike_str)
@@ -188,10 +203,10 @@ def detect_signals(df: pd.DataFrame) -> dict:
         score_sell += 0.10
 
     # ── ADX Trend Strength ────────────────────────────────────────────────────
-    adx = float(row.get("adx", 0))
+    adx = _value_or_default(row.get("adx", 0), 0.0)
     if adx > 25:
-        adx_pos = float(row.get("adx_pos", 0))
-        adx_neg = float(row.get("adx_neg", 0))
+        adx_pos = _value_or_default(row.get("adx_pos", 0), 0.0)
+        adx_neg = _value_or_default(row.get("adx_neg", 0), 0.0)
         if adx_pos > adx_neg:
             signals_buy.append(f"Strong trend confirmed (ADX {adx:.1f})")
             score_buy += 0.10
@@ -200,7 +215,7 @@ def detect_signals(df: pd.DataFrame) -> dict:
             score_sell += 0.10
 
     # ── Stochastic RSI ────────────────────────────────────────────────────────
-    stoch_k = float(row.get("stoch_k", 0.5))
+    stoch_k = _value_or_default(row.get("stoch_k", 0.5), 0.5)
     if stoch_k < 0.20:
         signals_buy.append("Stochastic RSI in oversold zone")
         score_buy += 0.10
@@ -209,7 +224,7 @@ def detect_signals(df: pd.DataFrame) -> dict:
         score_sell += 0.10
 
     # ── Decide Direction ──────────────────────────────────────────────────────
-    atr = float(row.get("atr", close * 0.015))
+    atr = _value_or_default(row.get("atr", close * 0.015), close * 0.015)
 
     if score_buy >= score_sell and score_buy >= 0.35:
         # Estimate target based on ATR and historical resistance
@@ -217,6 +232,8 @@ def detect_signals(df: pd.DataFrame) -> dict:
         return {
             "direction":   "buy",
             "score":       min(score_buy, 1.0),
+            "buy_score":   round(score_buy, 3),
+            "sell_score":  round(score_sell, 3),
             "signals":     signals_buy,
             "reason":      " + ".join(signals_buy[:3]),
             "entry_price": close,
@@ -224,12 +241,16 @@ def detect_signals(df: pd.DataFrame) -> dict:
             "atr":         atr,
             "rsi":         rsi,
             "vol_ratio":   vol_ratio,
+            "macd":        macd,
+            "macd_sig":    macd_sig,
         }
     elif score_sell > score_buy and score_sell >= 0.35:
         target_pct = min(max(_estimate_target_pct(df, "sell"), 3.0), 6.0)
         return {
             "direction":   "sell",
             "score":       min(score_sell, 1.0),
+            "buy_score":   round(score_buy, 3),
+            "sell_score":  round(score_sell, 3),
             "signals":     signals_sell,
             "reason":      " + ".join(signals_sell[:3]),
             "entry_price": close,
@@ -237,9 +258,16 @@ def detect_signals(df: pd.DataFrame) -> dict:
             "atr":         atr,
             "rsi":         rsi,
             "vol_ratio":   vol_ratio,
+            "macd":        macd,
+            "macd_sig":    macd_sig,
         }
     else:
-        return _empty_signal(close)
+        empty = _empty_signal(close)
+        empty["buy_score"] = round(score_buy, 3)
+        empty["sell_score"] = round(score_sell, 3)
+        empty["macd"] = macd
+        empty["macd_sig"] = macd_sig
+        return empty
 
 
 def _estimate_target_pct(df: pd.DataFrame, direction: str) -> float:
@@ -340,7 +368,7 @@ def detect_patterns(df: pd.DataFrame) -> dict:
         direction_votes["sell"] += 1
 
     # ── 52-Week Proximity ─────────────────────────────────────────────────────
-    pos_52w = float(df["52w_pos"].iloc[-1]) if "52w_pos" in df.columns else 0.5
+    pos_52w = _value_or_default(df["52w_pos"].iloc[-1], 0.5) if "52w_pos" in df.columns else 0.5
     if pos_52w < 0.15:
         patterns.append("Near 52-week low — potential reversal zone")
         score += 0.20

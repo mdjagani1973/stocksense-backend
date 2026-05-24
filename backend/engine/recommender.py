@@ -21,6 +21,7 @@ from engine.technical import compute_indicators, detect_signals, detect_patterns
 from engine.fundamental import run_fundamental_analysis
 
 logger = logging.getLogger("stocksense.engine")
+UNKNOWN_SECTORS = {"", "Unknown", "NSE", "BSE", None}
 
 
 @dataclass
@@ -45,18 +46,38 @@ class StockRecommendation:
         return d
 
 
+def _reject(ticker: str, reason: str, **details):
+    detail_parts = []
+    for key, value in details.items():
+        if value is None:
+            continue
+        detail_parts.append(f"{key}={value}")
+    suffix = f" ({', '.join(detail_parts)})" if detail_parts else ""
+    logger.info(f"Reject {ticker}: {reason}{suffix}")
+    return None
+
+
 def compute_composite_score(tech, pattern, sentiment, fund, fii_data):
     w = WEIGHTS
     sent_raw = {"positive": 0.8, "neutral": 0.4, "negative": 0.1}.get(
         sentiment.get("label", "neutral"), 0.4)
-    composite = (tech.get("score", 0) * w["technical"] +
-                 pattern.get("score", 0) * w["pattern"] +
-                 sent_raw * w["sentiment"] +
-                 fund.get("score", 0.5) * w["fundamental"])
+    breakdown = {
+        "technical": round(tech.get("score", 0) * w["technical"], 3),
+        "pattern": round(pattern.get("score", 0) * w["pattern"], 3),
+        "sentiment": round(sent_raw * w["sentiment"], 3),
+        "fundamental": round(fund.get("score", 0.5) * w["fundamental"], 3),
+    }
+    composite = sum(breakdown.values())
     fii_net = fii_data.get("fii_net_cr", 0)
     direction = tech.get("direction", "neutral")
-    if direction == "buy" and fii_net > 500: composite += 0.03
-    elif direction == "sell" and fii_net < -500: composite += 0.03
+    if direction == "buy" and fii_net > 500:
+        composite += 0.03
+        breakdown["fii_bonus"] = 0.03
+    elif direction == "sell" and fii_net < -500:
+        composite += 0.03
+        breakdown["fii_bonus"] = 0.03
+    else:
+        breakdown["fii_bonus"] = 0.0
 
     parts = [p for p in [
         tech.get("reason", ""),
@@ -65,7 +86,7 @@ def compute_composite_score(tech, pattern, sentiment, fund, fii_data):
         "Positive news" if sentiment.get("label") == "positive" else "",
         f"FII buying ₹{fii_net:,.0f} Cr" if fii_net > 800 else "",
     ] if p]
-    return min(composite, 1.0), " · ".join(parts[:4])
+    return min(composite, 1.0), " · ".join(parts[:4]), breakdown
 
 
 def analyse_stock(ticker: str, fii_data: dict, global_ctx: dict) -> Optional[StockRecommendation]:
@@ -73,29 +94,57 @@ def analyse_stock(ticker: str, fii_data: dict, global_ctx: dict) -> Optional[Sto
         # 1. FUNDAMENTAL GATE — runs first, reject ~65% of universe here
         fund = run_fundamental_analysis(ticker)
         if not fund["passed"]:
-            return None
+            return _reject(ticker, "fundamentals failed", failures=" | ".join(fund.get("failure_reasons", [])))
 
         # 2. OHLCV + Technical
         df = fetch_ohlcv(ticker, period="3mo", interval="1d")
         if df.empty or len(df) < 30:
-            return None
+            return _reject(ticker, "ohlcv unavailable", rows=len(df))
         df = compute_indicators(df)
-        tech    = detect_signals(df)
+        tech = detect_signals(df)
         pattern = detect_patterns(df)
         direction = tech.get("direction", "neutral")
-        if direction == "neutral": return None
-        if tech.get("score", 0) < 0.30 and pattern.get("score", 0) < 0.30: return None
+        if direction == "neutral":
+            return _reject(
+                ticker,
+                "technical direction neutral",
+                rows=len(df),
+                buy_score=tech.get("buy_score"),
+                sell_score=tech.get("sell_score"),
+                rsi=round(tech.get("rsi", 50), 1),
+                macd=round(tech.get("macd", 0), 3),
+                macd_sig=round(tech.get("macd_sig", 0), 3),
+                pattern_score=round(pattern.get("score", 0), 3),
+            )
+        if tech.get("score", 0) < 0.30 and pattern.get("score", 0) < 0.30:
+            return _reject(
+                ticker,
+                "weak technical and pattern scores",
+                tech_score=round(tech.get("score", 0), 3),
+                pattern_score=round(pattern.get("score", 0), 3),
+                direction=direction,
+            )
 
         # 3. Current price
         info = fetch_current_price(ticker)
-        if not info: return None
+        if not info:
+            return _reject(ticker, "current price unavailable")
 
         # 4. Sentiment
         sentiment = fetch_news_sentiment(ticker)
 
         # 5. Composite score
-        composite, reason = compute_composite_score(tech, pattern, sentiment, fund, fii_data)
-        if composite < 0.40: return None
+        composite, reason, breakdown = compute_composite_score(tech, pattern, sentiment, fund, fii_data)
+        if composite < 0.40:
+            return _reject(
+                ticker,
+                "composite score below threshold",
+                composite=round(composite, 3),
+                technical=breakdown["technical"],
+                pattern=breakdown["pattern"],
+                sentiment=breakdown["sentiment"],
+                fundamental=breakdown["fundamental"],
+            )
 
         # 6. Prices
         entry = float(info.get("price") or tech["entry_price"])
@@ -110,7 +159,15 @@ def analyse_stock(ticker: str, fii_data: dict, global_ctx: dict) -> Optional[Sto
             entry_low = entry_high = entry
 
         rr = round(abs(target - entry) / abs(stoploss - entry), 1) if abs(stoploss - entry) > 0 else 0
-        if rr < MIN_RR_RATIO: return None
+        if rr < MIN_RR_RATIO:
+            return _reject(
+                ticker,
+                "risk-reward below threshold",
+                rr=rr,
+                target_pct=round(target_pct, 2),
+                stoploss_pct=STOPLOSS_PCT,
+                direction=direction,
+            )
 
         sh = fund.get("shareholding", {}); fi = fund.get("financials", {})
         inst = max(sh.get("institutional_total", 0),
@@ -131,7 +188,7 @@ def analyse_stock(ticker: str, fii_data: dict, global_ctx: dict) -> Optional[Sto
         if usdinr: notes.append(f"₹/USD {usdinr.get('value', 84):.2f}")
         global_note = " · ".join(notes[:2]) or "Global markets stable"
 
-        return StockRecommendation(
+        recommendation = StockRecommendation(
             ticker=clean, name=info.get("name", clean), exchange=exchange,
             direction=direction, entry_price=entry, entry_low=entry_low,
             entry_high=entry_high, target_price=target, target_pct=round(target_pct, 1),
@@ -155,6 +212,18 @@ def analyse_stock(ticker: str, fii_data: dict, global_ctx: dict) -> Optional[Sto
             created_at=datetime.now(IST).isoformat(),
             date=datetime.now(IST).strftime("%Y-%m-%d"),
         )
+        logger.info(
+            "Accept %s: direction=%s confidence=%s composite=%.3f tech=%.3f pattern=%.3f rr=%.1f sector=%s",
+            ticker,
+            direction,
+            recommendation.confidence_pct,
+            composite,
+            tech.get("score", 0),
+            pattern.get("score", 0),
+            rr,
+            recommendation.sector,
+        )
+        return recommendation
     except Exception as e:
         logger.error(f"analyse_stock({ticker}): {e}", exc_info=True)
         return None
@@ -166,15 +235,27 @@ def run_engine(mode: str = "eod") -> list:
     fii_data   = fetch_fii_dii()
     universe   = screen_universe()
     logger.info(f"Universe: {len(universe)} stocks. Running fundamental gate first...")
-    candidates = [r for t in universe if (r := analyse_stock(t, fii_data, global_ctx))]
+    candidates = []
+    for ticker in universe:
+        recommendation = analyse_stock(ticker, fii_data, global_ctx)
+        if recommendation:
+            candidates.append(recommendation)
+    logger.info(f"Candidates after scoring: {len(candidates)}")
     candidates.sort(key=lambda r: r.confidence_pct, reverse=True)
     final_picks = []; sector_count: dict = {}
+    sector_capped = 0
     for rec in candidates:
-        if sector_count.get(rec.sector, 0) < 2:
-            final_picks.append(rec)
-            sector_count[rec.sector] = sector_count.get(rec.sector, 0) + 1
+        sector_key = rec.sector if rec.sector not in UNKNOWN_SECTORS else None
+        if sector_key and sector_count.get(sector_key, 0) >= 2:
+            sector_capped += 1
+            logger.info(f"Skip {rec.ticker}: sector cap reached for {sector_key}")
+            continue
+
+        final_picks.append(rec)
+        if sector_key:
+            sector_count[sector_key] = sector_count.get(sector_key, 0) + 1
         if len(final_picks) >= MAX_PICKS: break
-    logger.info(f"Final picks: {len(final_picks)}")
+    logger.info(f"Final picks: {len(final_picks)} (candidates={len(candidates)}, sector_capped={sector_capped})")
     save_picks(final_picks)
     return final_picks
 

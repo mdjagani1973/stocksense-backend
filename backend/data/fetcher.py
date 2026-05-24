@@ -25,6 +25,39 @@ SYMBOL_ALIASES = {
     "M&M":        "M&M",
 }
 
+SECTOR_MAP = {
+    "RELIANCE": "Energy",
+    "TCS": "Information Technology",
+    "HDFCBANK": "Banking",
+    "ICICIBANK": "Banking",
+    "AXISBANK": "Banking",
+    "KOTAKBANK": "Banking",
+    "SBIN": "Banking",
+    "WIPRO": "Information Technology",
+    "HCLTECH": "Information Technology",
+    "SUNPHARMA": "Pharma",
+    "TITAN": "Consumer Discretionary",
+    "TATAMOTORS": "Auto",
+    "MARUTI": "Auto",
+    "BAJFINANCE": "Financial Services",
+    "TECHM": "Information Technology",
+    "DIVISLAB": "Pharma",
+    "ASIANPAINT": "Consumer Goods",
+    "HINDUNILVR": "Consumer Goods",
+    "ITC": "Consumer Goods",
+    "COALINDIA": "Energy",
+    "EICHERMOT": "Auto",
+    "BAJAJFINSV": "Financial Services",
+    "ADANIPORTS": "Infrastructure",
+    "HEROMOTOCO": "Auto",
+    "TATACONSUM": "Consumer Goods",
+    "BHARTIARTL": "Telecom",
+    "NTPC": "Power",
+    "POWERGRID": "Power",
+    "LT": "Infrastructure",
+    "BRITANNIA": "Consumer Goods",
+}
+
 # ── Hardcoded Fundamentals DB ─────────────────────────────────────────────────
 FUNDAMENTALS_DB = {
     "RELIANCE":   (50.3, 0.37, 26.0, 11.2), "TCS":        (72.3, 0.01, 18.0, 12.5),
@@ -72,6 +105,20 @@ def _safe_float(val, default=0.0):
         return float(val) if val is not None else default
     except Exception:
         return default
+
+
+def _normalize_symbol(symbol: str) -> str:
+    return "".join(ch for ch in str(symbol).upper() if ch.isalnum())
+
+
+def _select_symbol_rows(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
+    row = df[df['SYMBOL'] == symbol]
+    if not row.empty:
+        return row
+
+    normalized_symbol = _normalize_symbol(symbol)
+    normalized_matches = df['SYMBOL'].astype(str).map(_normalize_symbol) == normalized_symbol
+    return df[normalized_matches]
 
 
 def _get_nse_session():
@@ -174,14 +221,14 @@ def fetch_ohlcv(ticker: str, period: str = "3mo", interval: str = "1d") -> pd.Da
     symbol = SYMBOL_ALIASES.get(symbol, symbol)
 
     days  = {"1mo": 22, "3mo": 66, "6mo": 130, "1y": 252}.get(period, 30)
-    dates = get_trading_dates(min(days, 30))
+    dates = get_trading_dates(days)
     rows  = []
 
     for date in dates:
         df = fetch_bhavcopy(date)
         if df.empty:
             continue
-        row = df[df['SYMBOL'] == symbol]
+        row = _select_symbol_rows(df, symbol)
         if not row.empty:
             r = row.iloc[0]
             try:
@@ -215,7 +262,7 @@ def fetch_current_price(ticker: str) -> dict:
         df = fetch_bhavcopy(date)
         if df.empty:
             continue
-        row = df[df['SYMBOL'] == symbol]
+        row = _select_symbol_rows(df, symbol)
         if not row.empty:
             r = row.iloc[0]
             close = _safe_float(r['CLOSE'])
@@ -225,7 +272,7 @@ def fetch_current_price(ticker: str) -> dict:
                 "ticker": ticker, "price": close, "prev_close": open_,
                 "change_pct": round(chg, 2), "market_cap": 0,
                 "pe_ratio": None, "52w_high": 0, "52w_low": 0,
-                "name": symbol, "sector": "NSE",
+                "name": symbol, "sector": SECTOR_MAP.get(symbol, "Unknown"),
                 "avg_volume": _safe_float(r.get('VOLUME', 0)),
                 "volume":     _safe_float(r.get('VOLUME', 0)),
             }
@@ -241,9 +288,16 @@ def fetch_bulk_prices(tickers: list) -> dict:
         if df.empty:
             continue
         for _, row in df.iterrows():
-            sym = str(row['SYMBOL'])
-            if sym in symbols and result[symbols[sym]] is None:
-                result[symbols[sym]] = _safe_float(row['CLOSE'])
+            sym = str(row['SYMBOL']).strip()
+            mapped = symbols.get(sym)
+            if not mapped:
+                normalized_sym = _normalize_symbol(sym)
+                for candidate_symbol, candidate_ticker in symbols.items():
+                    if _normalize_symbol(candidate_symbol) == normalized_sym:
+                        mapped = candidate_ticker
+                        break
+            if mapped and result[mapped] is None:
+                result[mapped] = _safe_float(row['CLOSE'])
         if all(v is not None for v in result.values()):
             break
     return result
