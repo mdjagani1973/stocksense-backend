@@ -939,7 +939,7 @@ function quoteSymbol(ticker, exchange) {
 async function fetchBrowserQuotes(symbols) {
   var cleanSymbols = Array.from(new Set((symbols || []).filter(Boolean)));
   if (!cleanSymbols.length) return {};
-  var url = 'https://query1.finance.yahoo.com/v7/finance/quote?symbols=' + encodeURIComponent(cleanSymbols.join(','));
+  var url = 'https://query2.finance.yahoo.com/v6/finance/quote?symbols=' + encodeURIComponent(cleanSymbols.join(','));
   var payload;
   try {
     payload = await xhrGetJson(url);
@@ -1002,6 +1002,11 @@ async function refreshIntradayPickQuotes(picks) {
     });
   } catch (err) {
     console.error('Pick quote refresh failed', err);
+    symbols.forEach(function(symbol) {
+      var strip = document.querySelector('[data-live-strip="' + symbol.replace(/"/g, '&quot;') + '"]');
+      if (!strip) return;
+      strip.innerHTML = '<div class="live-strip-main"><div class="live-strip-label">Live Price</div><div class="live-strip-value">Unavailable</div></div><div class="live-strip-sub">Browser quote refresh failed. Tap refresh and try again.</div>';
+    });
   }
 }
 
