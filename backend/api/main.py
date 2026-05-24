@@ -161,15 +161,50 @@ def get_portfolio():
         rows = conn.execute(
             "SELECT * FROM portfolio ORDER BY added_at DESC"
         ).fetchall()
-    holdings    = [dict(r) for r in rows]
-    total_cost  = sum(h["avg_price"] * h["quantity"] for h in holdings)
-    total_value = total_cost
+    holdings = [dict(r) for r in rows]
+    tickers = []
+    for holding in holdings:
+        suffix = ".BO" if str(holding.get("exchange", "NSE")).upper() == "BSE" else ".NS"
+        tickers.append(f"{holding['ticker']}{suffix}")
+
+    latest_prices = {}
+    if tickers:
+        try:
+            from data.fetcher import fetch_bulk_prices
+            latest_prices = fetch_bulk_prices(tickers)
+        except Exception as e:
+            logger.error(f"portfolio live pricing failed: {e}")
+
+    total_cost = 0.0
+    total_value = 0.0
+    total_pnl = 0.0
+    for holding, market_ticker in zip(holdings, tickers):
+        quantity = float(holding.get("quantity") or 0)
+        avg_price = float(holding.get("avg_price") or 0)
+        total_cost += avg_price * quantity
+
+        current_price = latest_prices.get(market_ticker)
+        if current_price is None:
+            current_price = avg_price
+        current_value = round(current_price * quantity, 2)
+        pnl = round(current_value - (avg_price * quantity), 2)
+        pnl_pct = round((pnl / (avg_price * quantity) * 100), 2) if avg_price > 0 and quantity > 0 else 0
+
+        holding["current_price"] = round(current_price, 2)
+        holding["current_value"] = current_value
+        holding["pnl"] = pnl
+        holding["pnl_pct"] = pnl_pct
+
+        total_value += current_value
+        total_pnl += pnl
+
+    total_pnl_pct = round((total_pnl / total_cost * 100), 2) if total_cost > 0 else 0
     return {
         "holdings": holdings,
         "total_cost": round(total_cost, 2),
         "total_value": round(total_value, 2),
-        "total_pnl": 0,
-        "total_pnl_pct": 0,
+        "total_pnl": round(total_pnl, 2),
+        "total_pnl_pct": total_pnl_pct,
     }
 
 

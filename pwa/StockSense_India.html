@@ -1024,7 +1024,11 @@ function renderPortfolio(data) {
     return;
   }
   holdingsRoot.innerHTML = holdings.map(function(h) {
-    return '<div class="hcard"><div class="hcard-top"><div><div class="hcard-name">' + escapeHtml(h.name || h.ticker) + '</div><div class="hcard-qty">' + escapeHtml(h.quantity) + ' shares &middot; ' + escapeHtml(h.exchange || 'NSE') + '</div></div><div class="hcard-pnl"><div class="hcard-pnl-val" style="color:var(--text2)">Saved</div><div style="font-size:10px;color:var(--text3);text-align:right">' + escapeHtml(h.added_at ? formatCompactDate(h.added_at) : '') + '</div></div></div><div class="hcard-bottom"><div class="hstat"><div class="hstat-lbl">Avg Buy</div><div class="hstat-val">' + formatRupee(h.avg_price || 0) + '</div></div><div class="hstat"><div class="hstat-lbl">Qty</div><div class="hstat-val">' + escapeHtml(h.quantity || 0) + '</div></div><div class="hstat"><div class="hstat-lbl">Notes</div><div class="hstat-val" style="color:var(--text2)">' + escapeHtml(h.notes || '—') + '</div></div></div></div>';
+    var pnl = typeof h.pnl === 'number' ? h.pnl : 0;
+    var pnlPct = typeof h.pnl_pct === 'number' ? h.pnl_pct : 0;
+    var pnlColor = pnl >= 0 ? 'var(--green)' : 'var(--red)';
+    var pnlSign = pnl >= 0 ? '+' : '−';
+    return '<div class="hcard"><div class="hcard-top"><div><div class="hcard-name">' + escapeHtml(h.name || h.ticker) + '</div><div class="hcard-qty">' + escapeHtml(h.quantity) + ' shares &middot; ' + escapeHtml(h.exchange || 'NSE') + '</div></div><div class="hcard-pnl"><div class="hcard-pnl-val" style="color:' + pnlColor + '">' + pnlSign + formatRupee(Math.abs(pnl)).replace('₹','₹') + '</div><div style="font-size:10px;color:' + pnlColor + ';text-align:right">' + pnlSign + Math.abs(pnlPct).toFixed(1) + '%</div></div></div><div class="hcard-bottom"><div class="hstat"><div class="hstat-lbl">Avg Buy</div><div class="hstat-val">' + formatRupee(h.avg_price || 0) + '</div></div><div class="hstat"><div class="hstat-lbl">Current</div><div class="hstat-val">' + formatRupee(h.current_price || 0) + '</div></div><div class="hstat"><div class="hstat-lbl">Cur. Value</div><div class="hstat-val">' + formatRupee(h.current_value || 0) + '</div></div></div></div>';
   }).join('');
 }
 
