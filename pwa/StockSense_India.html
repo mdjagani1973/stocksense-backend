@@ -931,9 +931,19 @@ async function runEngineNow() {
     if (!response.ok) {
       throw new Error('Engine run failed with ' + response.status);
     }
-    setEngineStatus('Engine finished. Refreshing picks, alerts, track, and portfolio now.', 'success');
+    var payload = await response.json();
+    var picks = payload && Array.isArray(payload.picks) ? payload.picks : [];
+    var grouped = {
+      date: new Date().toISOString().slice(0, 10),
+      buy_picks: picks.filter(function(pick){ return pick.direction === 'buy'; }),
+      sell_picks: picks.filter(function(pick){ return pick.direction === 'sell'; }),
+      total: picks.length,
+      generated_at: picks.length ? picks[0].created_at : null
+    };
+    renderHomePicks(grouped);
+    setEngineStatus('Engine finished with ' + picks.length + ' picks. Refreshing alerts, track, and portfolio now.', picks.length ? 'success' : 'info');
     await loadLiveData();
-    setEngineStatus('Engine run completed and live sections were refreshed.', 'success');
+    setEngineStatus('Engine run completed and live sections were refreshed.', picks.length ? 'success' : 'info');
   } catch (err) {
     console.error('Engine run failed', err);
     setEngineStatus('Engine run failed. Check Render logs, then try again. ' + err.message, 'error');
