@@ -264,6 +264,7 @@ body{font-family:'DM Sans',sans-serif;color:var(--text);display:flex;justify-con
     <div class="sched-row"><div class="sched-time">3:45 PM</div><div class="dot later"></div><div class="sched-text">EOD summary &mdash; how did picks perform today?</div></div>
   </div>
 
+  <div id="home-live-sections">
   <div class="picks-hdr">
     <div class="picks-title">Buy Candidates</div>
     <div class="count-badge buy">3 picks</div>
@@ -455,6 +456,7 @@ body{font-family:'DM Sans',sans-serif;color:var(--text);display:flex;justify-con
   </div>
 
   <div class="disclaimer">For informational purposes only. Not SEBI-registered investment advice. All trading decisions are your own responsibility. Do your own due diligence.</div>
+  </div>
 </div>
 
 <!-- PORTFOLIO -->
@@ -553,12 +555,14 @@ body{font-family:'DM Sans',sans-serif;color:var(--text);display:flex;justify-con
   <div class="header">
     <div class="header-top"><div class="app-name">Alert <span>Centre</span></div><div style="font-size:11px;color:var(--text3)">Last 48 hrs</div></div>
   </div>
+  <div id="alerts-list">
   <div class="alert-item"><div class="aicon g">&#128200;</div><div class="acontent"><div class="atitle">Tata Motors entered buy zone</div><div class="adesc">TATAMOTORS at &#8377;724 &mdash; within entry range &#8377;718&ndash;728. Near 52W low &mdash; good risk:reward. R:R of 1:2.9 intact.</div><div class="atime">Today &middot; 09:22 AM</div></div></div>
   <div class="alert-item"><div class="aicon a">&#9889;</div><div class="acontent"><div class="atitle">Today&apos;s picks are ready</div><div class="adesc">3 buy candidates + 2 sell candidates. All passed mandatory fundamental filters. Market opens in 15 minutes.</div><div class="atime">Today &middot; 09:00 AM</div></div></div>
   <div class="alert-item"><div class="aicon b">&#127760;</div><div class="acontent"><div class="atitle">Global pre-market update</div><div class="adesc">US markets closed positive. Nasdaq +0.83%, S&amp;P500 +0.61%. Gift Nifty signals gap-up ~80 pts. FII net buyers &#8377;1,240 Cr.</div><div class="atime">Today &middot; 08:30 AM</div></div></div>
   <div class="alert-item"><div class="aicon r">&#128680;</div><div class="acontent"><div class="atitle">Stop-loss risk &mdash; HDFC Bank</div><div class="adesc">HDFCBANK at &#8377;1,597 &mdash; approaching stop-loss &#8377;1,594. Stock near mid-range of 52W (&#8377;1,363&ndash;&#8377;1,880). Review position.</div><div class="atime">Yesterday &middot; 2:41 PM</div></div></div>
   <div class="alert-item"><div class="aicon g">&#9989;</div><div class="acontent"><div class="atitle">Reliance approaching exit zone</div><div class="adesc">RELIANCE at &#8377;2,841 &mdash; at 84% of 52W range. Exit target &#8377;2,900&ndash;2,920. Consider booking profits.</div><div class="atime">Yesterday &middot; 1:15 PM</div></div></div>
   <div class="alert-item"><div class="aicon a">&#128202;</div><div class="acontent"><div class="atitle">EOD summary &mdash; 28 Mar</div><div class="adesc">2 of 3 picks hit target. Tata Motors +4.1%. Infosys +2.8%. ICICI stopped out at -1.5%.</div><div class="atime">Yesterday &middot; 3:45 PM</div></div></div>
+  </div>
 </div>
 
 <!-- PERFORMANCE -->
@@ -567,11 +571,11 @@ body{font-family:'DM Sans',sans-serif;color:var(--text);display:flex;justify-con
     <div class="header-top"><div class="app-name">Performance <span>Track</span></div></div>
     <div class="header-sub">Last 30 trading days</div>
   </div>
-  <div class="perf-grid">
-    <div class="perf-card"><div class="perf-lbl">Win Rate</div><div class="perf-val g">68%</div><div class="perf-sub">17 of 25 picks profitable</div></div>
-    <div class="perf-card"><div class="perf-lbl">Avg Return</div><div class="perf-val g">+3.4%</div><div class="perf-sub">Per winning trade</div></div>
-    <div class="perf-card"><div class="perf-lbl">Avg Loss</div><div class="perf-val r">&minus;1.3%</div><div class="perf-sub">Per stopped trade</div></div>
-    <div class="perf-card"><div class="perf-lbl">Best Pick</div><div class="perf-val a">+6.1%</div><div class="perf-sub">Tata Motors &middot; 3 days</div></div>
+  <div class="perf-grid" id="perf-summary-grid">
+    <div class="perf-card"><div class="perf-lbl">Win Rate</div><div class="perf-val g" id="perf-win-rate">68%</div><div class="perf-sub" id="perf-win-rate-sub">17 of 25 picks profitable</div></div>
+    <div class="perf-card"><div class="perf-lbl">Avg Return</div><div class="perf-val g" id="perf-avg-return">+3.4%</div><div class="perf-sub" id="perf-avg-return-sub">Per winning trade</div></div>
+    <div class="perf-card"><div class="perf-lbl">Avg Loss</div><div class="perf-val r" id="perf-avg-loss">&minus;1.3%</div><div class="perf-sub" id="perf-avg-loss-sub">Per stopped trade</div></div>
+    <div class="perf-card"><div class="perf-lbl">Best Pick</div><div class="perf-val a" id="perf-best-pick">+6.1%</div><div class="perf-sub" id="perf-best-pick-sub">Tata Motors &middot; 3 days</div></div>
   </div>
   <div class="sec-label">Recent Pick History</div>
   <div class="hist-table">
@@ -675,6 +679,8 @@ body{font-family:'DM Sans',sans-serif;color:var(--text);display:flex;justify-con
 
 </div>
 <script>
+const API_BASE = window.API_BASE || 'https://stocksense-backend-1-wr9k.onrender.com';
+
 // Navigation
 function go(id, btn) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
@@ -691,6 +697,197 @@ function set52W(thumbId, low, high, current) {
   const pct = Math.min(Math.max((current - low) / (high - low) * 100, 2), 98);
   const thumb = document.getElementById(thumbId);
   if (thumb) thumb.style.left = pct + '%';
+}
+
+function escapeHtml(value) {
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function formatRupee(value) {
+  const num = Number(value || 0);
+  return '₹' + num.toLocaleString('en-IN', {
+    minimumFractionDigits: num % 1 ? 2 : 0,
+    maximumFractionDigits: 2
+  });
+}
+
+function formatCompactDate(value) {
+  if (!value) return 'Unknown time';
+  const dt = new Date(value);
+  if (Number.isNaN(dt.getTime())) return escapeHtml(value);
+  return dt.toLocaleString('en-IN', {
+    day: '2-digit',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+}
+
+function formatResult(pick) {
+  if (typeof pick.actual_result_pct === 'number' && !Number.isNaN(pick.actual_result_pct)) {
+    const sign = pick.actual_result_pct > 0 ? '+' : '';
+    return {
+      text: sign + pick.actual_result_pct.toFixed(1) + '%',
+      color: pick.actual_result_pct >= 0 ? 'var(--green)' : 'var(--red)'
+    };
+  }
+  const status = (pick.status || 'open').replace(/_/g, ' ');
+  const openLike = pick.status === 'open' || !pick.status;
+  return {
+    text: openLike ? 'Open' : status.charAt(0).toUpperCase() + status.slice(1),
+    color: openLike ? 'var(--text2)' : (pick.status === 'target_hit' ? 'var(--green)' : 'var(--red)')
+  };
+}
+
+function splitSignals(rawSignals) {
+  if (!rawSignals) return [];
+  if (Array.isArray(rawSignals)) return rawSignals;
+  return String(rawSignals).split(' | ').map(function(item){ return item.trim(); }).filter(Boolean);
+}
+
+function buildPickCard(pick) {
+  const isBuy = pick.direction === 'buy';
+  const cardClass = isBuy ? 'buy' : 'sell';
+  const entryLabel = isBuy ? 'Entry Range' : 'Current';
+  const middleLabel = isBuy ? 'Target' : 'Exit Zone';
+  const lastLabel = isBuy ? 'Stop-loss' : 'Protect at';
+  const entryValue = isBuy
+    ? formatRupee(pick.entry_low || pick.entry_price) + '&ndash;' + formatRupee(pick.entry_high || pick.entry_price)
+    : formatRupee(pick.entry_price);
+  const middleValue = isBuy
+    ? formatRupee(pick.target_price)
+    : formatRupee(pick.target_price) + '&ndash;' + formatRupee((pick.target_price || 0) * 1.007);
+  const signals = splitSignals(pick.signals);
+  const signalMarkup = signals.slice(0, 4).map(function(signal){
+    return '<span class="fpill b">' + escapeHtml(signal) + '</span>';
+  }).join('');
+  return `
+    <div class="scard ${cardClass}">
+      <div class="scard-top">
+        <div><div class="scard-name">${escapeHtml(pick.name || pick.ticker)}</div><div class="scard-ticker">${escapeHtml(pick.ticker)} &middot; ${escapeHtml(pick.exchange || 'NSE')} &middot; ${escapeHtml(pick.sector || 'Unknown')}</div></div>
+        <div class="conf-box"><div class="conf-num ${pick.confidence_pct >= 75 ? 'hi' : 'md'}">${escapeHtml(pick.confidence_pct)}%</div><div class="conf-label">Confidence</div></div>
+      </div>
+      <div class="price-row">
+        <div class="price-box"><div class="price-lbl">${entryLabel}</div><div class="price-val">${entryValue}</div></div>
+        <div class="price-box"><div class="price-lbl">${middleLabel}</div><div class="price-val t">${middleValue}</div></div>
+        <div class="price-box"><div class="price-lbl">${lastLabel}</div><div class="price-val sl">${formatRupee(pick.stoploss_price)}</div></div>
+      </div>
+      <div class="fund-row">
+        <span class="fpill g">Promoter ${escapeHtml(pick.promoter_pct || 0)}%</span>
+        <span class="fpill g">D/E ${escapeHtml(pick.debt_to_equity || 0)}</span>
+        <span class="fpill b">Inst ${escapeHtml(pick.institutional_pct || 0)}%</span>
+        <span class="fpill p">Rev +${escapeHtml(pick.revenue_growth_pct || 0)}%</span>
+        ${signalMarkup}
+      </div>
+      <div class="reason">${escapeHtml(pick.reason || 'No rationale available yet.')}</div>
+      <div class="card-footer"><div class="rr">R:R = 1 : ${escapeHtml(pick.rr_ratio || 0)}</div><div class="hold-txt">${escapeHtml(pick.hold_sessions || '')}</div></div>
+    </div>`;
+}
+
+function renderHomePicks(data) {
+  const root = document.getElementById('home-live-sections');
+  if (!root || !data) return;
+  const buyPicks = Array.isArray(data.buy_picks) ? data.buy_picks : [];
+  const sellPicks = Array.isArray(data.sell_picks) ? data.sell_picks : [];
+  const buyMarkup = buyPicks.length ? buyPicks.map(buildPickCard).join('') : '<div class="schedule-card"><div class="sched-text">No buy picks generated for this date.</div></div>';
+  const sellMarkup = sellPicks.length ? sellPicks.map(buildPickCard).join('') : '<div class="schedule-card"><div class="sched-text">No sell picks generated for this date.</div></div>';
+  root.innerHTML = `
+    <div class="picks-hdr">
+      <div class="picks-title">Buy Candidates</div>
+      <div class="count-badge buy">${buyPicks.length} pick${buyPicks.length === 1 ? '' : 's'}</div>
+    </div>
+    ${buyMarkup}
+    <div class="picks-hdr">
+      <div class="picks-title">Sell Candidates</div>
+      <div class="count-badge sell">${sellPicks.length} pick${sellPicks.length === 1 ? '' : 's'}</div>
+    </div>
+    ${sellMarkup}
+    <div class="disclaimer">Live prices and pick levels are fetched from the backend for ${escapeHtml(data.date || '')}. Refresh after running the engine for updated cards.</div>`;
+}
+
+function alertIconClass(alertType) {
+  if (alertType === 'critical' || alertType === 'stoploss') return 'r';
+  if (alertType === 'picks_ready' || alertType === 'target_hit' || alertType === 'intraday_move') return 'g';
+  if (alertType === 'global_update') return 'b';
+  return 'a';
+}
+
+function renderAlerts(data) {
+  const root = document.getElementById('alerts-list');
+  if (!root || !data) return;
+  const alerts = Array.isArray(data.alerts) ? data.alerts : [];
+  if (!alerts.length) {
+    root.innerHTML = '<div class="alert-item"><div class="aicon a">&#9888;</div><div class="acontent"><div class="atitle">No live alerts yet</div><div class="adesc">Run the engine or wait for scheduled jobs to generate alerts.</div><div class="atime">Just now</div></div></div>';
+    return;
+  }
+  root.innerHTML = alerts.map(function(alert) {
+    const parts = String(alert.message || '').split(' | ');
+    const title = parts.shift() || (alert.ticker || 'Alert');
+    const desc = parts.join(' | ') || 'No details available';
+    return `<div class="alert-item"><div class="aicon ${alertIconClass(alert.alert_type)}">&#128276;</div><div class="acontent"><div class="atitle">${escapeHtml(title)}</div><div class="adesc">${escapeHtml(desc)}</div><div class="atime">${formatCompactDate(alert.created_at)}</div></div></div>`;
+  }).join('');
+}
+
+function renderPerformance(data) {
+  if (!data) return;
+  const picks = Array.isArray(data.picks) ? data.picks : [];
+  const stats = data.stats || {};
+  const realized = picks.filter(function(pick){
+    return typeof pick.actual_result_pct === 'number' && !Number.isNaN(pick.actual_result_pct);
+  });
+  const wins = realized.filter(function(pick){ return pick.actual_result_pct > 0; });
+  const losses = realized.filter(function(pick){ return pick.actual_result_pct < 0; });
+  const avgWin = wins.length ? wins.reduce(function(sum, pick){ return sum + pick.actual_result_pct; }, 0) / wins.length : null;
+  const avgLoss = losses.length ? losses.reduce(function(sum, pick){ return sum + pick.actual_result_pct; }, 0) / losses.length : null;
+  const bestPick = realized.length ? realized.reduce(function(best, pick){
+    return !best || pick.actual_result_pct > best.actual_result_pct ? pick : best;
+  }, null) : null;
+
+  document.getElementById('perf-win-rate').textContent = (stats.win_rate_pct || 0) + '%';
+  document.getElementById('perf-win-rate-sub').textContent = (stats.target_hits || 0) + ' target hits from ' + (stats.total || 0) + ' picks';
+  document.getElementById('perf-avg-return').textContent = avgWin == null ? '--' : '+' + avgWin.toFixed(1) + '%';
+  document.getElementById('perf-avg-return-sub').textContent = wins.length ? 'Across ' + wins.length + ' winning trades' : 'No closed winning trades yet';
+  document.getElementById('perf-avg-loss').innerHTML = avgLoss == null ? '--' : '&minus;' + Math.abs(avgLoss).toFixed(1) + '%';
+  document.getElementById('perf-avg-loss-sub').textContent = losses.length ? 'Across ' + losses.length + ' stopped trades' : 'No closed losing trades yet';
+  document.getElementById('perf-best-pick').textContent = bestPick ? (bestPick.actual_result_pct > 0 ? '+' : '') + bestPick.actual_result_pct.toFixed(1) + '%' : '--';
+  document.getElementById('perf-best-pick-sub').textContent = bestPick ? bestPick.ticker + ' · ' + bestPick.date : 'No closed picks yet';
+
+  const rows = picks.length ? picks.map(function(pick) {
+    const result = formatResult(pick);
+    return `<div class="hist-row">
+      <div style="color:var(--text);font-size:12px;font-family:'DM Sans',sans-serif;font-weight:500">${escapeHtml(pick.ticker)}</div>
+      <div style="color:var(--text2)">${formatRupee(pick.entry_price)}</div>
+      <div style="color:var(--text2)">${formatRupee(pick.target_price)}</div>
+      <div style="color:${result.color};font-weight:500">${escapeHtml(result.text)}</div>
+    </div>`;
+  }).join('') : '<div class="hist-row"><div style="grid-column:1 / -1;color:var(--text2);font-family:\'DM Sans\',sans-serif;">No pick history available yet.</div></div>';
+  document.getElementById('pick-hist').innerHTML = rows;
+}
+
+async function fetchJSON(path) {
+  const response = await fetch(API_BASE + path, { headers: { 'Accept': 'application/json' } });
+  if (!response.ok) throw new Error(path + ' failed with ' + response.status);
+  return response.json();
+}
+
+async function loadLiveData() {
+  try {
+    const results = await Promise.allSettled([
+      fetchJSON('/picks/today'),
+      fetchJSON('/alerts?limit=20'),
+      fetchJSON('/picks/history?limit=30')
+    ]);
+    if (results[0].status === 'fulfilled') renderHomePicks(results[0].value);
+    if (results[1].status === 'fulfilled') renderAlerts(results[1].value);
+    if (results[2].status === 'fulfilled') renderPerformance(results[2].value);
+  } catch (err) {
+    console.error('Live data load failed', err);
+  }
 }
 
 // Add stock manually
@@ -818,26 +1015,9 @@ async function confirmImport() {
 }
 function showProc(v) { document.getElementById('processing-overlay').classList.toggle('show',v); }
 
-// Performance history
-const picks=[
-  {s:'TATAMOTORS',e:'&#8377;698',t:'&#8377;738',r:'+5.7%',w:true},
-  {s:'RELIANCE',e:'&#8377;2,790',t:'&#8377;2,900',r:'+3.9%',w:true},
-  {s:'WIPRO',e:'&#8377;452',t:'&#8377;472',r:'−1.5%',w:false},
-  {s:'ICICIBANK',e:'&#8377;1,142',t:'&#8377;1,190',r:'+4.2%',w:true},
-  {s:'SUNPHARMA',e:'&#8377;1,634',t:'&#8377;1,700',r:'+4.0%',w:true},
-  {s:'BAJFINANCE',e:'&#8377;7,210',t:'&#8377;7,490',r:'−1.4%',w:false},
-  {s:'HDFCBANK',e:'&#8377;1,580',t:'&#8377;1,644',r:'+3.1%',w:true},
-];
-const ph = document.getElementById('pick-hist');
-picks.forEach(p => {
-  const row = document.createElement('div');
-  row.className = 'hist-row';
-  row.innerHTML = `<div style="color:var(--text);font-size:12px;font-family:'DM Sans',sans-serif;font-weight:500">${p.s}</div><div style="color:var(--text2)">${p.e}</div><div style="color:var(--text2)">${p.t}</div><div style="color:${p.w?'var(--green)'  :'var(--red)'};font-weight:500">${p.r}</div>`;
-  ph.appendChild(row);
-});
-
 // Set 52W thumb on HDFC card dynamically
 set52W('thumb-hdfc', 1363, 1880, 1618);
+loadLiveData();
 </script>
 </body>
 </html>
