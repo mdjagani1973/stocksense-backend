@@ -1129,6 +1129,23 @@ function csvNumber(value) {
   return Number.isFinite(num) ? num : null;
 }
 
+function apiErrorMessage(err, fallback) {
+  if (!err) return fallback;
+  if (typeof err === 'string') return err;
+  if (Array.isArray(err.detail)) {
+    return err.detail.map(function(item) {
+      if (item && typeof item === 'object') {
+        return item.msg || JSON.stringify(item);
+      }
+      return String(item);
+    }).join(' | ');
+  }
+  if (err.detail && typeof err.detail === 'object') {
+    return err.detail.msg || JSON.stringify(err.detail);
+  }
+  return err.detail || err.message || fallback;
+}
+
 function handleCsvUpload(input) {
   var file = input && input.files && input.files[0];
   if (!file) return;
@@ -1187,7 +1204,7 @@ async function extractHoldings() {
       let msg = 'Screenshot extraction failed';
       try {
         const err = await r.json();
-        msg = err.detail || err.message || msg;
+        msg = apiErrorMessage(err, msg);
       } catch (_) {}
       throw new Error(msg);
     }
@@ -1227,7 +1244,7 @@ async function confirmImport() {
       let msg = 'Portfolio save failed';
       try {
         const err = await r.json();
-        msg = err.detail || err.message || msg;
+        msg = apiErrorMessage(err, msg);
       } catch (_) {}
       throw new Error(msg);
     }

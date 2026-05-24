@@ -7,7 +7,7 @@ import io
 import sqlite3
 import logging
 from datetime import datetime
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Body
 from fastapi.responses import JSONResponse
 from typing import List
 
@@ -106,7 +106,10 @@ async def upload_multiple_screenshots(
 
 
 @router.post("/confirm-screenshot-holdings")
-async def confirm_and_save_holdings(holdings: list, replace_all: bool = False):
+async def confirm_and_save_holdings(
+    holdings: list = Body(...),
+    replace_all: bool = False
+):
     """
     After the user reviews extracted holdings, call this to save them.
     replace_all=True clears portfolio first (full replacement).
