@@ -204,6 +204,7 @@ body{font-family:'DM Sans',sans-serif;color:var(--text);display:flex;justify-con
 
 /* SCREENSHOT UPLOAD */
 .toggle-upload-btn{display:flex;align-items:center;justify-content:center;gap:6px;background:var(--blueBg);border:1px solid rgba(77,159,255,0.3);border-radius:12px;padding:10px 14px;color:var(--blue);font-size:13px;font-weight:500;cursor:pointer;width:calc(100% - 32px);margin:0 16px 12px;font-family:'DM Sans',sans-serif;}
+.secondary-upload-btn{display:flex;align-items:center;justify-content:center;gap:6px;background:var(--card);border:1px solid var(--border2);border-radius:12px;padding:10px 14px;color:var(--text2);font-size:13px;font-weight:500;cursor:pointer;width:calc(100% - 32px);margin:0 16px 12px;font-family:'DM Sans',sans-serif;}
 .upload-section{display:none;}
 .upload-section.show{display:block;}
 .source-tabs{display:flex;margin:0 16px 12px;background:var(--bg3);border-radius:12px;padding:3px;gap:2px;}
@@ -540,6 +541,8 @@ body{font-family:'DM Sans',sans-serif;color:var(--text);display:flex;justify-con
   </div>
 
   <button class="toggle-upload-btn" onclick="toggleUpload()">&#128248; Import from Zerodha Screenshot</button>
+  <button class="secondary-upload-btn" onclick="document.getElementById('csv-input').click()">&#128196; Import Zerodha CSV</button>
+  <input type="file" id="csv-input" class="upload-input" accept=".csv,text/csv" onchange="handleCsvUpload(this)">
 
   <div class="upload-section" id="upload-section">
     <div class="sec-label" style="margin-top:0">Screenshot Source</div>
@@ -687,7 +690,7 @@ body{font-family:'DM Sans',sans-serif;color:var(--text);display:flex;justify-con
 <div class="processing-overlay" id="processing-overlay">
   <div class="processing-spinner"></div>
   <div class="processing-text">Reading your screenshot...</div>
-  <div class="processing-sub">Claude AI is extracting holdings from your Zerodha screenshot. Takes 5&ndash;10 seconds.</div>
+  <div class="processing-sub">The portfolio parser is extracting holdings from your Zerodha screenshot. Takes 5&ndash;10 seconds.</div>
 </div>
 
 </div>
@@ -1083,6 +1086,93 @@ function removeImg(i) {
   selectedImages.splice(i, 1);
   handleScreenshots({files: selectedImages});
   if (!selectedImages.length) document.getElementById('extract-btn').disabled = true;
+}
+
+function parseSimpleCsv(text) {
+  var rows = [];
+  var row = [];
+  var cell = '';
+  var inQuotes = false;
+  for (var i = 0; i < text.length; i++) {
+    var ch = text[i];
+    if (ch === '"') {
+      if (inQuotes && text[i + 1] === '"') {
+        cell += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (ch === ',' && !inQuotes) {
+      row.push(cell);
+      cell = '';
+    } else if ((ch === '\n' || ch === '\r') && !inQuotes) {
+      if (ch === '\r' && text[i + 1] === '\n') i++;
+      row.push(cell);
+      if (row.some(function(item){ return String(item).trim() !== ''; })) rows.push(row);
+      row = [];
+      cell = '';
+    } else {
+      cell += ch;
+    }
+  }
+  if (cell.length || row.length) {
+    row.push(cell);
+    if (row.some(function(item){ return String(item).trim() !== ''; })) rows.push(row);
+  }
+  return rows;
+}
+
+function csvNumber(value) {
+  var cleaned = String(value == null ? '' : value).replace(/,/g, '').replace(/₹/g, '').trim();
+  if (!cleaned) return null;
+  var num = Number(cleaned);
+  return Number.isFinite(num) ? num : null;
+}
+
+function handleCsvUpload(input) {
+  var file = input && input.files && input.files[0];
+  if (!file) return;
+  var reader = new FileReader();
+  reader.onload = function() {
+    try {
+      var text = String(reader.result || '');
+      var rows = parseSimpleCsv(text);
+      if (rows.length < 2) throw new Error('CSV file is empty or invalid');
+      var headers = rows[0].map(function(item){ return String(item || '').trim(); });
+      var required = ['Instrument', 'Qty.', 'Avg. cost'];
+      var missing = required.filter(function(name){ return headers.indexOf(name) === -1; });
+      if (missing.length) throw new Error('CSV missing required columns: ' + missing.join(', '));
+      var idx = {};
+      headers.forEach(function(name, i){ idx[name] = i; });
+      extractedHoldings = rows.slice(1).map(function(cols) {
+        var ticker = String(cols[idx['Instrument']] || '').trim().toUpperCase();
+        var quantity = csvNumber(cols[idx['Qty.']]);
+        var avgPrice = csvNumber(cols[idx['Avg. cost']]);
+        if (!ticker || !quantity || !avgPrice) return null;
+        return {
+          ticker: ticker,
+          name: ticker,
+          exchange: 'NSE',
+          quantity: Math.round(quantity),
+          avg_price: avgPrice,
+          current_price: csvNumber(cols[idx['LTP']]),
+          invested_value: csvNumber(cols[idx['Invested']]),
+          current_value: csvNumber(cols[idx['Cur. val']]),
+          pnl: csvNumber(cols[idx['P&L']]),
+          pnl_pct: csvNumber(cols[idx['Net chg.']])
+        };
+      }).filter(Boolean);
+      if (!extractedHoldings.length) throw new Error('No valid holdings rows found in CSV');
+      renderExtracted(extractedHoldings, {notes:'Imported from Zerodha CSV'});
+      document.getElementById('upload-section').classList.remove('show');
+    } catch (err) {
+      extractedHoldings = [];
+      document.getElementById('extracted-result').innerHTML = '<div class="schedule-card"><div class="sched-text" style="color:var(--red)">CSV import failed: ' + escapeHtml(err && err.message ? err.message : 'Unknown error') + '</div></div>';
+    } finally {
+      input.value = '';
+    }
+  };
+  reader.readAsText(file);
 }
 async function extractHoldings() {
   if (!selectedImages.length) return;
