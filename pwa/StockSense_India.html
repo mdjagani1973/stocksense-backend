@@ -1091,17 +1091,22 @@ async function extractHoldings() {
     const fd = new FormData();
     selectedImages.forEach(f => fd.append('files', f, f.name));
     fd.append('source', selectedSource);
-    const API = window.API_BASE || 'http://localhost:8000';
-    const r = await fetch(API + '/portfolio/upload-screenshots-multi', {method:'POST',body:fd});
-    if (!r.ok) throw new Error('API error');
+    const r = await fetch(API_BASE + '/portfolio/upload-screenshots-multi', {method:'POST',body:fd});
+    if (!r.ok) {
+      let msg = 'Screenshot extraction failed';
+      try {
+        const err = await r.json();
+        msg = err.detail || err.message || msg;
+      } catch (_) {}
+      throw new Error(msg);
+    }
     const res = await r.json();
     extractedHoldings = res.holdings || [];
-    if (!extractedHoldings.length) throw new Error('none');
+    if (!extractedHoldings.length) throw new Error('No holdings found in screenshot. Try clearer screenshots or switch the source tab.');
     renderExtracted(extractedHoldings, res);
   } catch(e) {
-    // Demo mode
-    extractedHoldings = [{ticker:'HDFCBANK',name:'HDFC Bank',exchange:'NSE',quantity:20,avg_price:1494,current_price:1618,pnl:2480,pnl_pct:8.3},{ticker:'RELIANCE',name:'Reliance Inds.',exchange:'NSE',quantity:12,avg_price:2411,current_price:2841,pnl:5160,pnl_pct:17.8},{ticker:'INFY',name:'Infosys',exchange:'NSE',quantity:15,avg_price:1565,current_price:1492,pnl:-1095,pnl_pct:-4.7},{ticker:'TATAMOTORS',name:'Tata Motors',exchange:'NSE',quantity:30,avg_price:582,current_price:724,pnl:4260,pnl_pct:24.4}];
-    renderExtracted(extractedHoldings, {notes:'Demo mode — connect backend for live extraction'});
+    extractedHoldings = [];
+    document.getElementById('extracted-result').innerHTML = '<div class="schedule-card"><div class="sched-text" style="color:var(--red)">Screenshot extraction failed: ' + escapeHtml(e && e.message ? e.message : 'Unknown error') + '</div></div>';
   } finally { showProc(false); }
 }
 function renderExtracted(holdings, meta) {
@@ -1126,26 +1131,26 @@ async function confirmImport() {
   if (!extractedHoldings.length) return;
   showProc(true);
   try {
-    const API = window.API_BASE || 'http://localhost:8000';
-    const r = await fetch(API+'/portfolio/confirm-screenshot-holdings?replace_all=true',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(extractedHoldings)});
-    if(!r.ok) throw new Error();
+    const r = await fetch(API_BASE+'/portfolio/confirm-screenshot-holdings?replace_all=true',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(extractedHoldings)});
+    if(!r.ok) {
+      let msg = 'Portfolio save failed';
+      try {
+        const err = await r.json();
+        msg = err.detail || err.message || msg;
+      } catch (_) {}
+      throw new Error(msg);
+    }
     const res = await r.json();
     alert(`Portfolio updated — ${res.saved} holdings saved!`);
-  } catch(e) {
-    const list = document.getElementById('holdings-list');
-    list.innerHTML = '';
-    extractedHoldings.forEach(h => {
-      const c=(h.pnl||0)>=0?'var(--green)'  :'var(--red)';
-      const s=(h.pnl||0)>=0?'+':'−';
-      const card=document.createElement('div');
-      card.className='hcard';
-      card.innerHTML=`<div class="hcard-top"><div><div class="hcard-name">${h.name}</div><div class="hcard-qty">${h.quantity} shares &middot; ${h.exchange}</div></div><div class="hcard-pnl"><div class="hcard-pnl-val" style="color:${c}">${s}&#8377;${Math.abs(h.pnl||0).toLocaleString('en-IN')}</div><div style="font-size:10px;color:${c};text-align:right">${s}${Math.abs(h.pnl_pct||0).toFixed(1)}%</div></div></div><div class="hcard-bottom"><div class="hstat"><div class="hstat-lbl">Avg Buy</div><div class="hstat-val">&#8377;${(h.avg_price||0).toLocaleString('en-IN')}</div></div><div class="hstat"><div class="hstat-lbl">Qty</div><div class="hstat-val">${h.quantity}</div></div><div class="hstat"><div class="hstat-lbl">52W</div><div class="hstat-val" style="color:var(--text2)">Loading...</div></div></div>`;
-      list.appendChild(card);
-    });
+    await loadLiveData();
     document.getElementById('upload-section').classList.remove('show');
     document.getElementById('extracted-result').innerHTML='';
     selectedImages=[];
     document.getElementById('preview-grid').innerHTML='';
+    document.getElementById('screenshot-input').value = '';
+    extractedHoldings = [];
+  } catch(e) {
+    alert('Could not save extracted holdings: ' + (e && e.message ? e.message : 'Unknown error'));
   } finally { showProc(false); }
 }
 function showProc(v) { document.getElementById('processing-overlay').classList.toggle('show',v); }

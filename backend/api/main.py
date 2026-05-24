@@ -19,6 +19,7 @@ from pydantic import BaseModel
 from typing import Optional
 
 from config.settings import IST, DB_PATH
+from api.screenshot_routes import router as screenshot_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -38,6 +39,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(screenshot_router)
 
 
 @app.on_event("startup")
