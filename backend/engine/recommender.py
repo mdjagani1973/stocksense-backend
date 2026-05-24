@@ -286,7 +286,10 @@ def init_db():
         conn.commit()
 
 def save_picks(picks):
+    run_date = picks[0].date if picks else datetime.now(IST).strftime("%Y-%m-%d")
     with sqlite3.connect(DB_PATH) as conn:
+        deleted = conn.execute("DELETE FROM picks WHERE date=?", (run_date,)).rowcount
+        logger.info(f"Cleared {deleted} existing picks for {run_date} before saving latest engine output")
         for p in picks:
             d = p.to_dict()
             conn.execute(f"INSERT INTO picks ({','.join(d)}) VALUES ({','.join(['?']*len(d))})",
