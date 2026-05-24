@@ -30,12 +30,16 @@ body{font-family:'DM Sans',sans-serif;color:var(--text);display:flex;justify-con
 .nav-icon{font-size:22px;line-height:1.2;}
 .header{padding:56px 20px 12px;background:linear-gradient(180deg,var(--bg2) 0%,transparent 100%);}
 .header-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;}
+.header-actions{display:flex;align-items:center;gap:8px;}
 .app-name{font-size:22px;font-weight:600;letter-spacing:-0.5px;}
 .app-name span{color:var(--accent);}
 .pill{font-size:11px;font-weight:500;padding:4px 12px;border-radius:20px;border:none;cursor:pointer;font-family:'DM Sans',sans-serif;}
 .pill.green{background:var(--greenBg);color:var(--green);border:1px solid rgba(0,214,143,0.2);}
 .pill.closed{background:var(--redBg);color:var(--red);border:1px solid rgba(255,77,109,0.2);}
 .pill.blue{background:var(--blueBg);color:var(--blue);border:1px solid rgba(77,159,255,0.2);}
+.header-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;background:var(--blueBg);color:var(--blue);border:1px solid rgba(77,159,255,0.24);border-radius:999px;padding:8px 12px;font-size:11px;font-weight:600;font-family:'DM Sans',sans-serif;cursor:pointer;transition:opacity .2s,transform .15s;}
+.header-btn:active{transform:scale(0.98);}
+.header-btn:disabled{opacity:.6;cursor:wait;transform:none;}
 .header-sub{font-size:12px;color:var(--text2);}
 .screen{display:none;padding-bottom:100px;}
 .screen.active{display:block;}
@@ -50,6 +54,11 @@ body{font-family:'DM Sans',sans-serif;color:var(--text);display:flex;justify-con
 .gi-divider{width:1px;background:var(--border2);flex-shrink:0;align-self:stretch;}
 .sec-label{font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.8px;margin:16px 16px 10px;}
 .schedule-card{margin:0 16px 16px;background:var(--card);border:1px solid var(--border);border-radius:16px;padding:12px 14px;}
+.status-banner{display:none;margin:0 16px 16px;border-radius:14px;border:1px solid var(--border);padding:11px 13px;font-size:12px;line-height:1.5;color:var(--text2);background:var(--card);}
+.status-banner.show{display:block;}
+.status-banner.info{border-color:rgba(77,159,255,0.24);background:var(--blueBg);color:var(--blue);}
+.status-banner.success{border-color:rgba(0,214,143,0.24);background:var(--greenBg);color:var(--green);}
+.status-banner.error{border-color:rgba(255,77,109,0.24);background:var(--redBg);color:var(--red);}
 .sched-row{display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--border);}
 .sched-row:last-child{border-bottom:none;}
 .sched-time{font-size:11px;font-family:'JetBrains Mono',monospace;color:var(--text3);min-width:52px;}
@@ -235,7 +244,10 @@ body{font-family:'DM Sans',sans-serif;color:var(--text);display:flex;justify-con
   <div class="header">
     <div class="header-top">
       <div class="app-name">Stock<span>Sense</span></div>
-      <div class="pill closed" id="market-status-pill">Market Closed</div>
+      <div class="header-actions">
+        <button class="header-btn" id="run-engine-btn" onclick="runEngineNow()">Run Engine Now</button>
+        <div class="pill closed" id="market-status-pill">Market Closed</div>
+      </div>
     </div>
     <div class="header-sub" id="home-market-sub">Loading live market status...</div>
   </div>
@@ -263,6 +275,7 @@ body{font-family:'DM Sans',sans-serif;color:var(--text);display:flex;justify-con
     <div class="sched-row"><div class="sched-time">1:30 PM</div><div class="dot later"></div><div class="sched-text">Afternoon scan update</div></div>
     <div class="sched-row"><div class="sched-time">3:45 PM</div><div class="dot later"></div><div class="sched-text">EOD summary &mdash; how did picks perform today?</div></div>
   </div>
+  <div class="status-banner" id="engine-status-banner">Manual engine status will appear here.</div>
 
   <div id="home-live-sections">
   <div class="picks-hdr">
@@ -893,6 +906,40 @@ async function loadLiveData() {
     if (results[5].status === 'fulfilled') renderPortfolio(results[5].value);
   } catch (err) {
     console.error('Live data load failed', err);
+  }
+}
+
+function setEngineStatus(message, tone) {
+  var banner = document.getElementById('engine-status-banner');
+  if (!banner) return;
+  banner.textContent = message;
+  banner.className = 'status-banner show ' + (tone || 'info');
+}
+
+async function runEngineNow() {
+  var btn = document.getElementById('run-engine-btn');
+  if (!btn || btn.disabled) return;
+  btn.disabled = true;
+  var originalLabel = btn.textContent;
+  btn.textContent = 'Running...';
+  setEngineStatus('Engine started. Render free tier can take 30 to 60 seconds before fresh picks appear.', 'info');
+  try {
+    var response = await fetch(API_BASE + '/engine/run?mode=eod', {
+      method: 'POST',
+      headers: { 'Accept': 'application/json' }
+    });
+    if (!response.ok) {
+      throw new Error('Engine run failed with ' + response.status);
+    }
+    setEngineStatus('Engine finished. Refreshing picks, alerts, track, and portfolio now.', 'success');
+    await loadLiveData();
+    setEngineStatus('Engine run completed and live sections were refreshed.', 'success');
+  } catch (err) {
+    console.error('Engine run failed', err);
+    setEngineStatus('Engine run failed. Check Render logs, then try again. ' + err.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = originalLabel;
   }
 }
 
