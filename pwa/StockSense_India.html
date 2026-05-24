@@ -235,12 +235,12 @@ body{font-family:'DM Sans',sans-serif;color:var(--text);display:flex;justify-con
   <div class="header">
     <div class="header-top">
       <div class="app-name">Stock<span>Sense</span></div>
-      <div class="pill closed">Market Closed</div>
+      <div class="pill closed" id="market-status-pill">Market Closed</div>
     </div>
-    <div class="header-sub">Sun 29 Mar 2026 &middot; Next open: Mon 9:15 AM IST</div>
+    <div class="header-sub" id="home-market-sub">Loading live market status...</div>
   </div>
 
-  <div class="global-bar">
+  <div class="global-bar" id="global-bar">
     <div class="gi"><div class="gi-label">Gift Nifty</div><div class="gi-val up">&#9650; +0.42%</div></div>
     <div class="gi-divider"></div>
     <div class="gi"><div class="gi-label">S&P 500</div><div class="gi-val up">&#9650; +0.61%</div></div>
@@ -471,10 +471,10 @@ body{font-family:'DM Sans',sans-serif;color:var(--text);display:flex;justify-con
 
   <div class="port-summary">
     <div class="port-total-lbl">Total Portfolio Value</div>
-    <div class="port-total">&#8377;2,14,830</div>
+    <div class="port-total" id="portfolio-total-value">&#8377;2,14,830</div>
     <div class="pnl-row">
-      <div class="pnl-item"><div class="pnl-lbl">Today&apos;s P&amp;L</div><div class="pnl-val g">+&#8377;3,240 (+1.53%)</div></div>
-      <div class="pnl-item"><div class="pnl-lbl">Overall P&amp;L</div><div class="pnl-val g">+&#8377;18,430 (+9.4%)</div></div>
+      <div class="pnl-item"><div class="pnl-lbl">Total Cost</div><div class="pnl-val g" id="portfolio-total-cost">&#8377;0</div></div>
+      <div class="pnl-item"><div class="pnl-lbl">Overall P&amp;L</div><div class="pnl-val g" id="portfolio-total-pnl">&#8377;0 (0%)</div></div>
     </div>
   </div>
 
@@ -878,16 +878,94 @@ async function fetchJSON(path) {
 async function loadLiveData() {
   try {
     const results = await Promise.allSettled([
+      fetchJSON('/market/status'),
+      fetchJSON('/market/global'),
       fetchJSON('/picks/today'),
       fetchJSON('/alerts?limit=20'),
-      fetchJSON('/picks/history?limit=30')
+      fetchJSON('/picks/history?limit=30'),
+      fetchJSON('/portfolio')
     ]);
-    if (results[0].status === 'fulfilled') renderHomePicks(results[0].value);
-    if (results[1].status === 'fulfilled') renderAlerts(results[1].value);
-    if (results[2].status === 'fulfilled') renderPerformance(results[2].value);
+    if (results[0].status === 'fulfilled') renderMarketStatus(results[0].value);
+    if (results[1].status === 'fulfilled') renderGlobalBar(results[1].value);
+    if (results[2].status === 'fulfilled') renderHomePicks(results[2].value);
+    if (results[3].status === 'fulfilled') renderAlerts(results[3].value);
+    if (results[4].status === 'fulfilled') renderPerformance(results[4].value);
+    if (results[5].status === 'fulfilled') renderPortfolio(results[5].value);
   } catch (err) {
     console.error('Live data load failed', err);
   }
+}
+
+function initializeLivePlaceholders() {
+  var home = document.getElementById('home-live-sections');
+  if (home) {
+    home.innerHTML = '<div class="schedule-card"><div class="sched-text">Loading live picks...</div></div>';
+  }
+  var alerts = document.getElementById('alerts-list');
+  if (alerts) {
+    alerts.innerHTML = '<div class="alert-item"><div class="aicon a">&#9888;</div><div class="acontent"><div class="atitle">Loading alerts</div><div class="adesc">Fetching latest alerts from the backend.</div><div class="atime">Please wait</div></div></div>';
+  }
+  var hist = document.getElementById('pick-hist');
+  if (hist) {
+    hist.innerHTML = '<div class="hist-row"><div style="grid-column:1 / -1;color:var(--text2);font-family:\'DM Sans\',sans-serif;">Loading pick history...</div></div>';
+  }
+  var holdings = document.getElementById('holdings-list');
+  if (holdings) {
+    holdings.innerHTML = '<div class="hcard"><div class="hcard-name">Loading portfolio...</div><div class="hcard-qty">Fetching saved holdings</div></div>';
+  }
+}
+
+function renderMarketStatus(data) {
+  var pill = document.getElementById('market-status-pill');
+  var sub = document.getElementById('home-market-sub');
+  if (pill) {
+    pill.textContent = data && data.is_open ? 'Market Open' : 'Market Closed';
+    pill.className = 'pill ' + (data && data.is_open ? 'green' : 'closed');
+  }
+  if (sub) {
+    var nextText = data && data.is_open ? 'Closes: ' + data.closes_at : 'Next open: ' + data.opens_at;
+    sub.textContent = (data && data.day ? data.day : 'Market') + ' · ' + nextText;
+  }
+}
+
+function renderGlobalBar(data) {
+  var root = document.getElementById('global-bar');
+  if (!root) return;
+  var global = data && data.global ? data.global : {};
+  var fii = data && data.fii_dii ? data.fii_dii : {};
+  var items = [
+    { label: 'USD/INR', value: global.usdinr ? formatRupee(global.usdinr.value).replace('₹', '') : 'N/A', cls: 'dn' },
+    { label: 'S&P 500', value: global.sp500 ? ((global.sp500.change_pct >= 0 ? '▲ ' : '▼ ') + global.sp500.change_pct.toFixed(2) + '%') : 'N/A', cls: global.sp500 && global.sp500.change_pct >= 0 ? 'up' : 'dn' },
+    { label: 'Nasdaq', value: global.nasdaq ? ((global.nasdaq.change_pct >= 0 ? '▲ ' : '▼ ') + global.nasdaq.change_pct.toFixed(2) + '%') : 'N/A', cls: global.nasdaq && global.nasdaq.change_pct >= 0 ? 'up' : 'dn' },
+    { label: 'FII Flow', value: typeof fii.fii_net_cr === 'number' ? ((fii.fii_net_cr >= 0 ? '+' : '−') + '₹' + Math.abs(fii.fii_net_cr).toLocaleString('en-IN') + ' Cr') : 'N/A', cls: fii.fii_net_cr >= 0 ? 'up' : 'dn' }
+  ];
+  root.innerHTML = items.map(function(item, index) {
+    return '<div class="gi"><div class="gi-label">' + escapeHtml(item.label) + '</div><div class="gi-val ' + item.cls + '">' + escapeHtml(item.value) + '</div></div>' + (index < items.length - 1 ? '<div class="gi-divider"></div>' : '');
+  }).join('');
+}
+
+function renderPortfolio(data) {
+  var holdingsRoot = document.getElementById('holdings-list');
+  var totalValue = document.getElementById('portfolio-total-value');
+  var totalCost = document.getElementById('portfolio-total-cost');
+  var totalPnl = document.getElementById('portfolio-total-pnl');
+  if (totalValue) totalValue.textContent = formatRupee(data && data.total_value ? data.total_value : 0);
+  if (totalCost) totalCost.textContent = formatRupee(data && data.total_cost ? data.total_cost : 0);
+  if (totalPnl) {
+    var pnlValue = data && typeof data.total_pnl === 'number' ? data.total_pnl : 0;
+    var pnlPct = data && typeof data.total_pnl_pct === 'number' ? data.total_pnl_pct : 0;
+    totalPnl.textContent = formatRupee(pnlValue) + ' (' + pnlPct + '%)';
+    totalPnl.className = 'pnl-val ' + (pnlValue >= 0 ? 'g' : 'r');
+  }
+  if (!holdingsRoot) return;
+  var holdings = data && Array.isArray(data.holdings) ? data.holdings : [];
+  if (!holdings.length) {
+    holdingsRoot.innerHTML = '<div class="hcard"><div class="hcard-name">No portfolio holdings yet</div><div class="hcard-qty">Import screenshots or add holdings manually to populate this tab.</div></div>';
+    return;
+  }
+  holdingsRoot.innerHTML = holdings.map(function(h) {
+    return '<div class="hcard"><div class="hcard-top"><div><div class="hcard-name">' + escapeHtml(h.name || h.ticker) + '</div><div class="hcard-qty">' + escapeHtml(h.quantity) + ' shares &middot; ' + escapeHtml(h.exchange || 'NSE') + '</div></div><div class="hcard-pnl"><div class="hcard-pnl-val" style="color:var(--text2)">Saved</div><div style="font-size:10px;color:var(--text3);text-align:right">' + escapeHtml(h.added_at ? formatCompactDate(h.added_at) : '') + '</div></div></div><div class="hcard-bottom"><div class="hstat"><div class="hstat-lbl">Avg Buy</div><div class="hstat-val">' + formatRupee(h.avg_price || 0) + '</div></div><div class="hstat"><div class="hstat-lbl">Qty</div><div class="hstat-val">' + escapeHtml(h.quantity || 0) + '</div></div><div class="hstat"><div class="hstat-lbl">Notes</div><div class="hstat-val" style="color:var(--text2)">' + escapeHtml(h.notes || '—') + '</div></div></div></div>';
+  }).join('');
 }
 
 // Add stock manually
@@ -1016,6 +1094,7 @@ async function confirmImport() {
 function showProc(v) { document.getElementById('processing-overlay').classList.toggle('show',v); }
 
 // Set 52W thumb on HDFC card dynamically
+initializeLivePlaceholders();
 set52W('thumb-hdfc', 1363, 1880, 1618);
 loadLiveData();
 </script>
