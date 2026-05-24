@@ -1163,10 +1163,11 @@ function handleCsvUpload(input) {
         };
       }).filter(Boolean);
       if (!extractedHoldings.length) throw new Error('No valid holdings rows found in CSV');
+      document.getElementById('upload-section').classList.add('show');
       renderExtracted(extractedHoldings, {notes:'Imported from Zerodha CSV'});
-      document.getElementById('upload-section').classList.remove('show');
     } catch (err) {
       extractedHoldings = [];
+      document.getElementById('upload-section').classList.add('show');
       document.getElementById('extracted-result').innerHTML = '<div class="schedule-card"><div class="sched-text" style="color:var(--red)">CSV import failed: ' + escapeHtml(err && err.message ? err.message : 'Unknown error') + '</div></div>';
     } finally {
       input.value = '';
