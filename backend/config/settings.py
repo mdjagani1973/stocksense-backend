@@ -32,15 +32,19 @@ INTRADAY_ALERT_PCT  = 2.0
 
 MIN_MARKET_CAP_CR   = 2000
 MIN_AVG_VOLUME      = 100000
-MAX_STOCKS_TO_SCAN  = 200
+MAX_STOCKS_TO_SCAN  = 300
 EXCHANGES           = ["NSE", "BSE"]
 
 WEIGHTS = {
-    "technical":   0.45,
-    "pattern":     0.30,
-    "sentiment":   0.10,
-    "fundamental": 0.15,
+    "technical":   0.48,
+    "pattern":     0.27,
+    "sentiment":   0.08,
+    "fundamental": 0.17,
 }
+
+TECHNICAL_DIRECTION_MIN_SCORE = 0.38
+MIN_TECH_PATTERN_SCORE        = 0.35
+COMPOSITE_MIN_SCORE           = 0.43
 
 RSI_OVERSOLD        = 38
 RSI_OVERBOUGHT      = 62
@@ -66,8 +70,8 @@ DB_PATH = "stocksense.db"
 # Relaxed fundamental filters
 PROMOTER_HOLDING_MIN_PCT      = 35.0
 DEBT_TO_EQUITY_MAX            = 0.8
-INSTITUTIONAL_HOLDING_MIN_PCT = 10.0
-REVENUE_GROWTH_MIN_PCT        = 8.0
+INSTITUTIONAL_HOLDING_MIN_PCT = 12.0
+REVENUE_GROWTH_MIN_PCT        = 10.0
 
 STOCK_UNIVERSE = [
     "RELIANCE.NS","TCS.NS","HDFCBANK.NS","INFY.NS","ICICIBANK.NS",

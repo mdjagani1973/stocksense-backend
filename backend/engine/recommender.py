@@ -12,6 +12,7 @@ from typing import Optional
 from config.settings import (
     IST, WEIGHTS, MAX_PICKS, STOPLOSS_PCT, MIN_RR_RATIO,
     HOLD_SESSIONS_MIN, HOLD_SESSIONS_MAX, DB_PATH,
+    MIN_TECH_PATTERN_SCORE, COMPOSITE_MIN_SCORE,
 )
 from data.fetcher import (
     fetch_ohlcv, fetch_current_price, fetch_news_sentiment,
@@ -116,7 +117,7 @@ def analyse_stock(ticker: str, fii_data: dict, global_ctx: dict) -> Optional[Sto
                 macd_sig=round(tech.get("macd_sig", 0), 3),
                 pattern_score=round(pattern.get("score", 0), 3),
             )
-        if tech.get("score", 0) < 0.30 and pattern.get("score", 0) < 0.30:
+        if tech.get("score", 0) < MIN_TECH_PATTERN_SCORE and pattern.get("score", 0) < MIN_TECH_PATTERN_SCORE:
             return _reject(
                 ticker,
                 "weak technical and pattern scores",
@@ -135,7 +136,7 @@ def analyse_stock(ticker: str, fii_data: dict, global_ctx: dict) -> Optional[Sto
 
         # 5. Composite score
         composite, reason, breakdown = compute_composite_score(tech, pattern, sentiment, fund, fii_data)
-        if composite < 0.40:
+        if composite < COMPOSITE_MIN_SCORE:
             return _reject(
                 ticker,
                 "composite score below threshold",

@@ -10,6 +10,7 @@ from textblob import TextBlob
 import xml.etree.ElementTree as ET
 from config.settings import (
     IST, GNEWS_RSS, SENTIMENT_POSITIVE, SENTIMENT_NEGATIVE,
+    STOCK_UNIVERSE, MAX_STOCKS_TO_SCAN, MIN_AVG_VOLUME,
 )
 
 logger = logging.getLogger("stocksense.data")
@@ -376,7 +377,42 @@ def fetch_nse_delivery_pct(symbol: str) -> float:
 
 
 def screen_universe() -> list:
-    """Warm bhavcopy cache then return pre-qualified stocks."""
+    """
+    Warm bhavcopy cache then return a controlled, consistency-first universe.
+    We expand beyond the original 30-stock pre-qualified basket, but only keep
+    tickers that have known fundamentals and sufficient recent liquidity.
+    """
     warm_bhavcopy_cache(30)
-    logger.info(f"Pre-qualified universe: {len(PREQUALIFIED_STOCKS)} stocks")
-    return PREQUALIFIED_STOCKS
+    candidates = []
+    seen = set()
+    base_universe = STOCK_UNIVERSE[:MAX_STOCKS_TO_SCAN] if STOCK_UNIVERSE else PREQUALIFIED_STOCKS
+
+    for ticker in base_universe:
+        if ticker in seen:
+            continue
+        seen.add(ticker)
+
+        symbol = ticker.replace(".NS", "").replace(".BO", "").strip().upper()
+        if symbol not in FUNDAMENTALS_DB:
+            continue
+
+        info = fetch_current_price(ticker)
+        if not info:
+            continue
+
+        if _safe_float(info.get("volume", 0)) < MIN_AVG_VOLUME:
+            continue
+
+        candidates.append(ticker)
+
+    if not candidates:
+        logger.warning("Controlled universe filter returned 0 stocks; falling back to pre-qualified basket")
+        logger.info(f"Pre-qualified universe fallback: {len(PREQUALIFIED_STOCKS)} stocks")
+        return PREQUALIFIED_STOCKS
+
+    logger.info(
+        "Controlled universe selected: %s stocks from %s configured candidates (quality-first filter)",
+        len(candidates),
+        len(base_universe),
+    )
+    return candidates

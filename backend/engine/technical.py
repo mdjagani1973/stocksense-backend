@@ -13,6 +13,7 @@ from config.settings import (
     BOLLINGER_WINDOW, BOLLINGER_STD,
     VOLUME_SPIKE_MULT,
     MACD_SIGNAL_WINDOW,
+    TECHNICAL_DIRECTION_MIN_SCORE,
 )
 
 logger = logging.getLogger("stocksense.technical")
@@ -226,7 +227,7 @@ def detect_signals(df: pd.DataFrame) -> dict:
     # ── Decide Direction ──────────────────────────────────────────────────────
     atr = _value_or_default(row.get("atr", close * 0.015), close * 0.015)
 
-    if score_buy >= score_sell and score_buy >= 0.35:
+    if score_buy >= score_sell and score_buy >= TECHNICAL_DIRECTION_MIN_SCORE:
         # Estimate target based on ATR and historical resistance
         target_pct = min(max(_estimate_target_pct(df, "buy"), 3.0), 6.0)
         return {
@@ -244,7 +245,7 @@ def detect_signals(df: pd.DataFrame) -> dict:
             "macd":        macd,
             "macd_sig":    macd_sig,
         }
-    elif score_sell > score_buy and score_sell >= 0.35:
+    elif score_sell > score_buy and score_sell >= TECHNICAL_DIRECTION_MIN_SCORE:
         target_pct = min(max(_estimate_target_pct(df, "sell"), 3.0), 6.0)
         return {
             "direction":   "sell",
