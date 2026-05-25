@@ -1056,6 +1056,99 @@ function cachePortfolioPayload(data) {
   }
 }
 
+function roundMoney(value) {
+  return Math.round(Number(value || 0) * 100) / 100;
+}
+
+function portfolioHoldingKey(h) {
+  return [
+    String(h && h.ticker || '').toUpperCase(),
+    String(h && h.exchange || 'NSE').toUpperCase(),
+    String(Math.round(Number(h && h.quantity || 0))),
+    roundMoney(h && h.avg_price || 0).toFixed(2)
+  ].join('|');
+}
+
+function summarizePortfolioPayload(holdings) {
+  var items = Array.isArray(holdings) ? holdings : [];
+  var totalCost = 0;
+  var totalValue = 0;
+  items.forEach(function(h) {
+    var qty = Number(h && h.quantity || 0);
+    var avg = Number(h && h.avg_price || 0);
+    var current = Number(h && h.current_price);
+    var currentValue = Number(h && h.current_value);
+    totalCost += avg * qty;
+    if (!Number.isFinite(currentValue)) {
+      if (Number.isFinite(current)) currentValue = current * qty;
+      else currentValue = avg * qty;
+    }
+    totalValue += currentValue;
+  });
+  var totalPnl = totalValue - totalCost;
+  var totalPnlPct = totalCost > 0 ? (totalPnl / totalCost * 100) : 0;
+  return {
+    holdings: items,
+    total_cost: roundMoney(totalCost),
+    total_value: roundMoney(totalValue),
+    total_pnl: roundMoney(totalPnl),
+    total_pnl_pct: roundMoney(totalPnlPct)
+  };
+}
+
+function overlayCachedPortfolioLiveData(data, cached) {
+  if (!data || !Array.isArray(data.holdings) || !data.holdings.length || !cached || !Array.isArray(cached.holdings) || !cached.holdings.length) {
+    return data;
+  }
+  var cachedMap = {};
+  cached.holdings.forEach(function(h) {
+    cachedMap[portfolioHoldingKey(h)] = h;
+  });
+  var sameSet = data.holdings.every(function(h) { return !!cachedMap[portfolioHoldingKey(h)]; }) && data.holdings.length === cached.holdings.length;
+  if (!sameSet) return data;
+  var mergedHoldings = data.holdings.map(function(h) {
+    var cachedHolding = cachedMap[portfolioHoldingKey(h)];
+    if (!cachedHolding) return h;
+    return Object.assign({}, h, {
+      current_price: Number.isFinite(Number(cachedHolding.current_price)) ? Number(cachedHolding.current_price) : h.current_price,
+      current_value: Number.isFinite(Number(cachedHolding.current_value)) ? Number(cachedHolding.current_value) : h.current_value,
+      pnl: Number.isFinite(Number(cachedHolding.pnl)) ? Number(cachedHolding.pnl) : h.pnl,
+      pnl_pct: Number.isFinite(Number(cachedHolding.pnl_pct)) ? Number(cachedHolding.pnl_pct) : h.pnl_pct
+    });
+  });
+  return summarizePortfolioPayload(mergedHoldings);
+}
+
+function buildImportedPortfolioPayload(holdings, noteText) {
+  var items = (holdings || []).map(function(h) {
+    var qty = Math.round(Number(h && h.quantity || 0));
+    var avg = Number(h && h.avg_price || 0);
+    var currentPrice = Number(h && h.current_price);
+    var currentValue = Number(h && h.current_value);
+    if (!Number.isFinite(currentValue) && Number.isFinite(currentPrice)) currentValue = currentPrice * qty;
+    if (!Number.isFinite(currentPrice) && Number.isFinite(currentValue) && qty > 0) currentPrice = currentValue / qty;
+    if (!Number.isFinite(currentPrice)) currentPrice = avg;
+    if (!Number.isFinite(currentValue)) currentValue = avg * qty;
+    var pnl = Number(h && h.pnl);
+    if (!Number.isFinite(pnl)) pnl = currentValue - (avg * qty);
+    var pnlPct = Number(h && h.pnl_pct);
+    if (!Number.isFinite(pnlPct)) pnlPct = avg > 0 && qty > 0 ? (pnl / (avg * qty) * 100) : 0;
+    return {
+      ticker: h.ticker,
+      name: h.name || h.ticker,
+      exchange: h.exchange || 'NSE',
+      quantity: qty,
+      avg_price: avg,
+      current_price: roundMoney(currentPrice),
+      current_value: roundMoney(currentValue),
+      pnl: roundMoney(pnl),
+      pnl_pct: roundMoney(pnlPct),
+      notes: noteText || h.notes || ''
+    };
+  });
+  return summarizePortfolioPayload(items);
+}
+
 function readPortfolioCache() {
   try {
     var raw = localStorage.getItem(PORTFOLIO_CACHE_KEY);
@@ -1187,25 +1280,28 @@ async function loadLiveData() {
   }
 }
 
-function hydratePortfolio(data) {
+function hydratePortfolio(data, options) {
+  var cached = readPortfolioCache();
   var holdings = data && Array.isArray(data.holdings) ? data.holdings : [];
   if (holdings.length) {
-    cachePortfolioPayload(data);
-    renderPortfolio(data);
+    var merged = overlayCachedPortfolioLiveData(data, cached);
+    cachePortfolioPayload(merged);
+    renderPortfolio(merged, options);
     setPortfolioStatus('', 'info');
-    return;
+    return merged;
   }
-  var cached = readPortfolioCache();
   if (cached) {
-    renderPortfolio(cached);
+    renderPortfolio(cached, options);
     var cachedAt = localStorage.getItem(PORTFOLIO_CACHE_TS_KEY);
     var msg = 'Backend returned no holdings. Showing your last saved device copy instead.';
     if (cachedAt) msg += ' Cached on ' + new Date(cachedAt).toLocaleString();
     setPortfolioStatus(msg, 'warn', '<button class="confirm-btn" style="margin:0;width:100%" onclick="restorePortfolioFromCache()">Restore cached holdings to backend</button>');
-    return;
+    return cached;
   }
-  renderPortfolio(data || { holdings: [], total_cost: 0, total_value: 0, total_pnl: 0, total_pnl_pct: 0 });
+  var emptyPayload = data || { holdings: [], total_cost: 0, total_value: 0, total_pnl: 0, total_pnl_pct: 0 };
+  renderPortfolio(emptyPayload, options);
   setPortfolioStatus('No saved portfolio holdings were found yet.', 'info');
+  return emptyPayload;
 }
 
 function setEngineStatus(message, tone) {
@@ -1358,7 +1454,7 @@ function renderGlobalBar(data) {
   }).join('');
 }
 
-function renderPortfolio(data) {
+function renderPortfolio(data, options) {
   var holdingsRoot = document.getElementById('holdings-list');
   var totalValue = document.getElementById('portfolio-total-value');
   var totalCost = document.getElementById('portfolio-total-cost');
@@ -1385,7 +1481,9 @@ function renderPortfolio(data) {
     var symbol = quoteSymbol(h.ticker || '', h.exchange || 'NSE');
     return '<div class="hcard" data-portfolio-symbol="' + escapeHtml(symbol) + '" data-avg-price="' + escapeHtml(h.avg_price || 0) + '" data-quantity="' + escapeHtml(h.quantity || 0) + '"><div class="hcard-top"><div><div class="hcard-name">' + escapeHtml(h.name || h.ticker) + '</div><div class="hcard-qty">' + escapeHtml(h.quantity) + ' shares &middot; ' + escapeHtml(h.exchange || 'NSE') + '</div></div><div class="hcard-pnl"><div class="hcard-pnl-val" data-portfolio-pnl style="color:' + pnlColor + '">' + pnlSign + formatRupee(Math.abs(pnl)).replace('₹','₹') + '</div><div data-portfolio-pnl-pct style="font-size:10px;color:' + pnlColor + ';text-align:right">' + pnlSign + Math.abs(pnlPct).toFixed(1) + '%</div></div></div><div class="hcard-bottom"><div class="hstat"><div class="hstat-lbl">Avg Buy</div><div class="hstat-val">' + formatRupee(h.avg_price || 0) + '</div></div><div class="hstat"><div class="hstat-lbl">Current</div><div class="hstat-val" data-portfolio-current>' + formatRupee(h.current_price || 0) + '</div></div><div class="hstat"><div class="hstat-lbl">Cur. Value</div><div class="hstat-val" data-portfolio-value>' + formatRupee(h.current_value || 0) + '</div></div></div></div>';
   }).join('');
-  refreshPortfolioIntradayQuotes(holdings);
+  if (!options || !options.skipIntradayRefresh) {
+    refreshPortfolioIntradayQuotes(holdings);
+  }
 }
 
 async function refreshPortfolioNow() {
@@ -1397,7 +1495,13 @@ async function refreshPortfolioNow() {
   setPortfolioStatus('Refreshing saved holdings and latest portfolio prices...', 'info');
   try {
     var data = await fetchJSON('/portfolio');
-    hydratePortfolio(data);
+    var hydrated = hydratePortfolio(data, { skipIntradayRefresh: true });
+    var summary = await refreshPortfolioIntradayQuotes(hydrated && hydrated.holdings ? hydrated.holdings : []);
+    if (summary && summary.updated > 0) {
+      setPortfolioStatus('Portfolio refreshed from backend. Updated live quotes for ' + summary.updated + ' of ' + summary.total + ' holdings.', 'info');
+    } else {
+      setPortfolioStatus('Saved holdings were refreshed from backend, but live quotes were unavailable. Showing latest saved values.', 'warn');
+    }
   } catch (err) {
     console.error('Portfolio refresh failed', err);
     hydratePortfolio(null);
@@ -1448,25 +1552,34 @@ async function restorePortfolioFromCache() {
 
 async function refreshPortfolioIntradayQuotes(holdings) {
   var items = (holdings || []).filter(Boolean);
-  if (!items.length) return;
+  if (!items.length) return { updated: 0, total: 0 };
   var symbols = items.map(function(h) { return quoteSymbol(h.ticker || '', h.exchange || 'NSE'); });
   try {
     var quotes = await fetchBrowserQuotes(symbols);
     var totalCost = 0;
     var totalValue = 0;
+    var updated = 0;
+    var enrichedHoldings = [];
     items.forEach(function(h) {
       var symbol = quoteSymbol(h.ticker || '', h.exchange || 'NSE');
       var card = document.querySelector('[data-portfolio-symbol="' + symbol.replace(/"/g, '&quot;') + '"]');
-      if (!card) return;
-      var avgPrice = Number(card.getAttribute('data-avg-price') || 0);
-      var quantity = Number(card.getAttribute('data-quantity') || 0);
+      var avgPrice = card ? Number(card.getAttribute('data-avg-price') || 0) : Number(h.avg_price || 0);
+      var quantity = card ? Number(card.getAttribute('data-quantity') || 0) : Number(h.quantity || 0);
       totalCost += avgPrice * quantity;
       var quote = quotes[symbol];
       var livePrice = quote && typeof quote.price === 'number' ? quote.price : Number(h.current_price || avgPrice || 0);
+      if (quote && typeof quote.price === 'number') updated += 1;
       var liveValue = livePrice * quantity;
       var pnl = liveValue - (avgPrice * quantity);
       var pnlPct = avgPrice > 0 && quantity > 0 ? (pnl / (avgPrice * quantity) * 100) : 0;
       totalValue += liveValue;
+      enrichedHoldings.push(Object.assign({}, h, {
+        current_price: roundMoney(livePrice),
+        current_value: roundMoney(liveValue),
+        pnl: roundMoney(pnl),
+        pnl_pct: roundMoney(pnlPct)
+      }));
+      if (!card) return;
       var pnlColor = pnl >= 0 ? 'var(--green)' : 'var(--red)';
       var pnlSign = pnl >= 0 ? '+' : '−';
       var currentEl = card.querySelector('[data-portfolio-current]');
@@ -1493,8 +1606,17 @@ async function refreshPortfolioIntradayQuotes(holdings) {
       totalPnlEl.textContent = formatRupee(totalPnl) + ' (' + totalPnlPct.toFixed(2) + '%)';
       totalPnlEl.className = 'pnl-val ' + (totalPnl >= 0 ? 'g' : 'r');
     }
+    cachePortfolioPayload({
+      holdings: enrichedHoldings,
+      total_cost: roundMoney(totalCost),
+      total_value: roundMoney(totalValue),
+      total_pnl: roundMoney(totalValue - totalCost),
+      total_pnl_pct: roundMoney(totalCost > 0 ? ((totalValue - totalCost) / totalCost * 100) : 0)
+    });
+    return { updated: updated, total: items.length };
   } catch (err) {
     console.error('Portfolio quote refresh failed', err);
+    return { updated: 0, total: items.length, error: err };
   }
 }
 
@@ -1527,6 +1649,7 @@ function addStock() {
 let selectedImages = [];
 let selectedSource = 'auto';
 let extractedHoldings = [];
+let extractedHoldingsNote = '';
 
 function toggleUpload() {
   const sec = document.getElementById('upload-section');
@@ -1650,10 +1773,12 @@ function handleCsvUpload(input) {
         };
       }).filter(Boolean);
       if (!extractedHoldings.length) throw new Error('No valid holdings rows found in CSV');
+      extractedHoldingsNote = 'Imported from Zerodha CSV';
       document.getElementById('upload-section').classList.add('show');
       renderExtracted(extractedHoldings, {notes:'Imported from Zerodha CSV'});
     } catch (err) {
       extractedHoldings = [];
+      extractedHoldingsNote = '';
       document.getElementById('upload-section').classList.add('show');
       document.getElementById('extracted-result').innerHTML = '<div class="schedule-card"><div class="sched-text" style="color:var(--red)">CSV import failed: ' + escapeHtml(err && err.message ? err.message : 'Unknown error') + '</div></div>';
     } finally {
@@ -1680,10 +1805,12 @@ async function extractHoldings() {
     }
     const res = await r.json();
     extractedHoldings = res.holdings || [];
+    extractedHoldingsNote = res.notes || 'Imported from Zerodha screenshot';
     if (!extractedHoldings.length) throw new Error('No holdings found in screenshot. Try clearer screenshots or switch the source tab.');
     renderExtracted(extractedHoldings, res);
   } catch(e) {
     extractedHoldings = [];
+    extractedHoldingsNote = '';
     document.getElementById('extracted-result').innerHTML = '<div class="schedule-card"><div class="sched-text" style="color:var(--red)">Screenshot extraction failed: ' + escapeHtml(e && e.message ? e.message : 'Unknown error') + '</div></div>';
   } finally { showProc(false); }
 }
@@ -1719,14 +1846,18 @@ async function confirmImport() {
       throw new Error(msg);
     }
     const res = await r.json();
+    var importedPayload = buildImportedPortfolioPayload(extractedHoldings, extractedHoldingsNote || 'Imported holdings');
+    cachePortfolioPayload(importedPayload);
+    renderPortfolio(importedPayload, { skipIntradayRefresh: true });
+    setPortfolioStatus('Portfolio updated — ' + res.saved + ' holdings saved. Showing imported live values; tap Refresh to fetch the latest backend holdings and browser quotes.', 'info');
     alert(`Portfolio updated — ${res.saved} holdings saved!`);
-    await loadLiveData();
     document.getElementById('upload-section').classList.remove('show');
     document.getElementById('extracted-result').innerHTML='';
     selectedImages=[];
     document.getElementById('preview-grid').innerHTML='';
     document.getElementById('screenshot-input').value = '';
     extractedHoldings = [];
+    extractedHoldingsNote = '';
   } catch(e) {
     alert('Could not save extracted holdings: ' + (e && e.message ? e.message : 'Unknown error'));
   } finally { showProc(false); }

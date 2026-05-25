@@ -7,7 +7,7 @@ import io
 import sqlite3
 import logging
 from datetime import datetime
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Body
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Body, Query
 from fastapi.responses import JSONResponse
 from typing import List
 
@@ -108,7 +108,7 @@ async def upload_multiple_screenshots(
 @router.post("/confirm-screenshot-holdings")
 async def confirm_and_save_holdings(
     holdings: list = Body(...),
-    replace_all: bool = False
+    replace_all: bool = Query(default=False)
 ):
     """
     After the user reviews extracted holdings, call this to save them.
@@ -142,18 +142,20 @@ async def confirm_and_save_holdings(
                     "SELECT id FROM portfolio WHERE ticker=?", (ticker,)
                 ).fetchone()
                 if existing:
+                    note_text = h.get("notes") or h.get("source_note") or "Updated via imported holdings"
                     conn.execute(
                         "UPDATE portfolio SET quantity=?, avg_price=?, notes=? WHERE ticker=?",
-                        (qty, price, "Updated via screenshot", ticker)
+                        (qty, price, note_text, ticker)
                     )
                     saved += 1
                     continue
 
+            note_text = h.get("notes") or h.get("source_note") or "Imported holdings"
             conn.execute(
                 """INSERT INTO portfolio (ticker, name, exchange, quantity, avg_price, added_at, notes)
                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
                 (ticker, h.get("name", ticker), h.get("exchange", "NSE"),
-                 qty, price, now, "Imported from Zerodha screenshot")
+                 qty, price, now, note_text)
             )
             saved += 1
 
