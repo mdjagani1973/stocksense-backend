@@ -620,12 +620,12 @@ body{font-family:'DM Sans',sans-serif;color:var(--text);display:flex;justify-con
   <div class="settings-sec">
     <div class="settings-sec-title">Notifications</div>
     <div class="settings-card">
-      <div class="srow"><div class="srow-lbl">9 AM picks ready</div><div class="toggle on" onclick="this.classList.toggle('on')"></div></div>
-      <div class="srow"><div class="srow-lbl">8:30 AM global update</div><div class="toggle on" onclick="this.classList.toggle('on')"></div></div>
-      <div class="srow"><div class="srow-lbl">Intraday move alerts</div><div class="toggle on" onclick="this.classList.toggle('on')"></div></div>
-      <div class="srow"><div class="srow-lbl">Stop-loss alerts</div><div class="toggle on" onclick="this.classList.toggle('on')"></div></div>
-      <div class="srow"><div class="srow-lbl">Target hit alerts</div><div class="toggle on" onclick="this.classList.toggle('on')"></div></div>
-      <div class="srow"><div class="srow-lbl">3:45 PM EOD summary</div><div class="toggle" onclick="this.classList.toggle('on')"></div></div>
+      <div class="srow"><div class="srow-lbl">9 AM picks ready</div><div class="toggle on" data-setting-key="notif_9am_picks" onclick="toggleSetting(this)"></div></div>
+      <div class="srow"><div class="srow-lbl">8:30 AM global update</div><div class="toggle on" data-setting-key="notif_830_global" onclick="toggleSetting(this)"></div></div>
+      <div class="srow"><div class="srow-lbl">Intraday move alerts</div><div class="toggle on" data-setting-key="notif_intraday_alerts" onclick="toggleSetting(this)"></div></div>
+      <div class="srow"><div class="srow-lbl">Stop-loss alerts</div><div class="toggle on" data-setting-key="notif_stoploss" onclick="toggleSetting(this)"></div></div>
+      <div class="srow"><div class="srow-lbl">Target hit alerts</div><div class="toggle on" data-setting-key="notif_target_hit" onclick="toggleSetting(this)"></div></div>
+      <div class="srow"><div class="srow-lbl">3:45 PM EOD summary</div><div class="toggle" data-setting-key="notif_eod_summary" onclick="toggleSetting(this)"></div></div>
     </div>
   </div>
   <div class="settings-sec">
@@ -646,7 +646,7 @@ body{font-family:'DM Sans',sans-serif;color:var(--text);display:flex;justify-con
       <div class="srow"><div class="srow-lbl">Debt-to-equity</div><div class="srow-val">&lt; 0.5</div></div>
       <div class="srow"><div class="srow-lbl">FII + DII + MF</div><div class="srow-val">&gt; 15% combined</div></div>
       <div class="srow"><div class="srow-lbl">Revenue growth YoY</div><div class="srow-val">&gt; 10%</div></div>
-      <div class="srow"><div class="srow-lbl">52W range shown on cards</div><div class="toggle on" onclick="this.classList.toggle('on')"></div></div>
+      <div class="srow"><div class="srow-lbl">52W range shown on cards</div><div class="toggle on" data-setting-key="ui_show_52w_range" onclick="toggleSetting(this)"></div></div>
     </div>
   </div>
   <div class="settings-sec">
@@ -655,9 +655,9 @@ body{font-family:'DM Sans',sans-serif;color:var(--text);display:flex;justify-con
       <div class="srow"><div class="srow-lbl">Exchanges</div><div class="srow-val">NSE + BSE</div></div>
       <div class="srow"><div class="srow-lbl">Min Market Cap</div><div class="srow-val">&#8377;2,000 Cr</div></div>
       <div class="srow"><div class="srow-lbl">Min Daily Volume</div><div class="srow-val">5 lakh shares</div></div>
-      <div class="srow"><div class="srow-lbl">Large cap</div><div class="toggle on" onclick="this.classList.toggle('on')"></div></div>
-      <div class="srow"><div class="srow-lbl">Mid cap</div><div class="toggle on" onclick="this.classList.toggle('on')"></div></div>
-      <div class="srow"><div class="srow-lbl">Small cap</div><div class="toggle" onclick="this.classList.toggle('on')"></div></div>
+      <div class="srow"><div class="srow-lbl">Large cap</div><div class="toggle on" data-setting-key="universe_large_cap" onclick="toggleSetting(this)"></div></div>
+      <div class="srow"><div class="srow-lbl">Mid cap</div><div class="toggle on" data-setting-key="universe_mid_cap" onclick="toggleSetting(this)"></div></div>
+      <div class="srow"><div class="srow-lbl">Small cap</div><div class="toggle" data-setting-key="universe_small_cap" onclick="toggleSetting(this)"></div></div>
     </div>
   </div>
   <div class="settings-sec">
@@ -941,8 +941,65 @@ function quoteSymbol(ticker, exchange) {
   return ticker + (String(exchange || 'NSE').toUpperCase() === 'BSE' ? '.BO' : '.NS');
 }
 
+var SETTINGS_STORAGE_KEY = 'ss_settings_v1';
 var PORTFOLIO_CACHE_KEY = 'ss_portfolio_cache_v1';
 var PORTFOLIO_CACHE_TS_KEY = 'ss_portfolio_cache_ts_v1';
+
+var DEFAULT_SETTINGS = {
+  notif_9am_picks: true,
+  notif_830_global: true,
+  notif_intraday_alerts: true,
+  notif_stoploss: true,
+  notif_target_hit: true,
+  notif_eod_summary: false,
+  ui_show_52w_range: true,
+  universe_large_cap: true,
+  universe_mid_cap: true,
+  universe_small_cap: false
+};
+
+function readSettings() {
+  try {
+    var raw = localStorage.getItem(SETTINGS_STORAGE_KEY);
+    if (!raw) return Object.assign({}, DEFAULT_SETTINGS);
+    var parsed = JSON.parse(raw);
+    return Object.assign({}, DEFAULT_SETTINGS, parsed || {});
+  } catch (err) {
+    console.warn('Settings read failed', err);
+    return Object.assign({}, DEFAULT_SETTINGS);
+  }
+}
+
+function writeSettings(settings) {
+  try {
+    localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+  } catch (err) {
+    console.warn('Settings write failed', err);
+  }
+}
+
+function applySettingsToUi(settings) {
+  document.querySelectorAll('[data-setting-key]').forEach(function(toggle) {
+    var key = toggle.getAttribute('data-setting-key');
+    toggle.classList.toggle('on', !!settings[key]);
+  });
+}
+
+function toggleSetting(toggleEl) {
+  if (!toggleEl) return;
+  var key = toggleEl.getAttribute('data-setting-key');
+  if (!key) return;
+  var settings = readSettings();
+  settings[key] = !settings[key];
+  writeSettings(settings);
+  applySettingsToUi(settings);
+}
+
+function initializeSettings() {
+  var settings = readSettings();
+  writeSettings(settings);
+  applySettingsToUi(settings);
+}
 
 function cachePortfolioPayload(data) {
   try {
@@ -1569,6 +1626,7 @@ function showProc(v) { document.getElementById('processing-overlay').classList.t
 
 // Set 52W thumb on HDFC card dynamically
 initializeLivePlaceholders();
+initializeSettings();
 set52W('thumb-hdfc', 1363, 1880, 1618);
 loadLiveData();
 </script>
