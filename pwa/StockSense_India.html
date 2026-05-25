@@ -873,6 +873,7 @@ function renderHomePicks(data) {
   if (!root || !data) return;
   const buyPicks = Array.isArray(data.buy_picks) ? data.buy_picks : [];
   const sellPicks = Array.isArray(data.sell_picks) ? data.sell_picks : [];
+  CURRENT_HOME_PICKS = buyPicks.concat(sellPicks);
   const buyMarkup = buyPicks.length ? buyPicks.map(buildPickCard).join('') : '<div class="schedule-card"><div class="sched-text">No buy picks generated for this date.</div></div>';
   const sellMarkup = sellPicks.length ? sellPicks.map(buildPickCard).join('') : '<div class="schedule-card"><div class="sched-text">No sell picks generated for this date.</div></div>';
   const labelDate = formatDisplayDate(data.date || '');
@@ -882,7 +883,10 @@ function renderHomePicks(data) {
   root.innerHTML = `
     <div class="picks-hdr">
       <div class="picks-title">Buy Candidates</div>
-      <div class="count-badge buy">${buyPicks.length} pick${buyPicks.length === 1 ? '' : 's'}</div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button class="header-btn" id="retry-pick-quotes-btn" onclick="retryPickQuotesNow()">Retry Live Prices</button>
+        <div class="count-badge buy">${buyPicks.length} pick${buyPicks.length === 1 ? '' : 's'}</div>
+      </div>
     </div>
     ${buyMarkup}
     <div class="picks-hdr">
@@ -989,6 +993,7 @@ function quoteSymbol(ticker, exchange) {
 var SETTINGS_STORAGE_KEY = 'ss_settings_v1';
 var PORTFOLIO_CACHE_KEY = 'ss_portfolio_cache_v1';
 var PORTFOLIO_CACHE_TS_KEY = 'ss_portfolio_cache_ts_v1';
+var CURRENT_HOME_PICKS = [];
 
 var DEFAULT_SETTINGS = {
   notif_9am_picks: true,
@@ -1249,6 +1254,22 @@ async function refreshIntradayPickQuotes(picks) {
       if (!strip) return;
       strip.innerHTML = '<div class="live-strip-main"><div class="live-strip-label">Live Price</div><div class="live-strip-value">Unavailable</div></div><div class="live-strip-sub">Browser quote refresh failed. Tap refresh and try again.</div>';
     });
+  }
+}
+
+async function retryPickQuotesNow() {
+  var btn = document.getElementById('retry-pick-quotes-btn');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Refreshing...';
+  }
+  try {
+    await refreshIntradayPickQuotes(CURRENT_HOME_PICKS || []);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = 'Retry Live Prices';
+    }
   }
 }
 
