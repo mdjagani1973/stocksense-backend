@@ -485,7 +485,10 @@ body{font-family:'DM Sans',sans-serif;color:var(--text);display:flex;justify-con
   <div class="header">
     <div class="header-top">
       <div class="app-name">My <span>Portfolio</span></div>
-      <button class="pill blue" onclick="showModal()">+ Add</button>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button class="pill blue" id="portfolio-refresh-btn" onclick="refreshPortfolioNow()">Refresh</button>
+        <button class="pill blue" onclick="showModal()">+ Add</button>
+      </div>
     </div>
     <div class="header-sub">Screenshot import &middot; Manual entry &middot; Update anytime</div>
   </div>
@@ -498,6 +501,8 @@ body{font-family:'DM Sans',sans-serif;color:var(--text);display:flex;justify-con
       <div class="pnl-item"><div class="pnl-lbl">Overall P&amp;L</div><div class="pnl-val g" id="portfolio-total-pnl">&#8377;0 (0%)</div></div>
     </div>
   </div>
+
+  <div id="portfolio-status-note" style="display:none"></div>
 
   <div id="holdings-list">
     <div class="hcard alert-h">
@@ -936,6 +941,44 @@ function quoteSymbol(ticker, exchange) {
   return ticker + (String(exchange || 'NSE').toUpperCase() === 'BSE' ? '.BO' : '.NS');
 }
 
+var PORTFOLIO_CACHE_KEY = 'ss_portfolio_cache_v1';
+var PORTFOLIO_CACHE_TS_KEY = 'ss_portfolio_cache_ts_v1';
+
+function cachePortfolioPayload(data) {
+  try {
+    if (!data || !Array.isArray(data.holdings) || !data.holdings.length) return;
+    localStorage.setItem(PORTFOLIO_CACHE_KEY, JSON.stringify(data));
+    localStorage.setItem(PORTFOLIO_CACHE_TS_KEY, new Date().toISOString());
+  } catch (err) {
+    console.warn('Portfolio cache write failed', err);
+  }
+}
+
+function readPortfolioCache() {
+  try {
+    var raw = localStorage.getItem(PORTFOLIO_CACHE_KEY);
+    if (!raw) return null;
+    var parsed = JSON.parse(raw);
+    return parsed && Array.isArray(parsed.holdings) && parsed.holdings.length ? parsed : null;
+  } catch (err) {
+    console.warn('Portfolio cache read failed', err);
+    return null;
+  }
+}
+
+function setPortfolioStatus(message, tone, actionHtml) {
+  var root = document.getElementById('portfolio-status-note');
+  if (!root) return;
+  if (!message) {
+    root.style.display = 'none';
+    root.innerHTML = '';
+    return;
+  }
+  var color = tone === 'error' ? 'var(--red)' : (tone === 'warn' ? '#f5b24f' : 'var(--blue)');
+  root.style.display = 'block';
+  root.innerHTML = '<div class="schedule-card" style="margin-bottom:12px;border-color:' + color + '"><div class="sched-text" style="color:' + color + '">' + escapeHtml(message) + '</div>' + (actionHtml ? '<div style="margin-top:8px">' + actionHtml + '</div>' : '') + '</div>';
+}
+
 async function fetchBrowserQuotes(symbols) {
   var cleanSymbols = Array.from(new Set((symbols || []).filter(Boolean)));
   if (!cleanSymbols.length) return {};
@@ -981,7 +1024,11 @@ async function refreshIntradayPickQuotes(picks) {
       var quote = quotes[symbol];
       var strip = document.querySelector('[data-live-strip="' + symbol.replace(/"/g, '&quot;') + '"]');
       var card = document.querySelector('.scard[data-quote-symbol="' + symbol.replace(/"/g, '&quot;') + '"]');
-      if (!strip || !card || !quote || typeof quote.price !== 'number') return;
+      if (!strip || !card) return;
+      if (!quote || typeof quote.price !== 'number') {
+        strip.innerHTML = '<div class="live-strip-main"><div class="live-strip-label">Live Price</div><div class="live-strip-value">Unavailable</div></div><div class="live-strip-sub">No browser quote found for ' + escapeHtml(symbol) + '. Tap refresh and try again.</div>';
+        return;
+      }
       var priceClass = quote.changePct != null ? (quote.changePct >= 0 ? 'live-strip-up' : 'live-strip-dn') : '';
       var direction = card.getAttribute('data-direction') || 'buy';
       var target = Number(card.getAttribute('data-target-price') || 0);
@@ -1025,10 +1072,32 @@ async function loadLiveData() {
     if (results[2].status === 'fulfilled') renderHomePicks(results[2].value);
     if (results[3].status === 'fulfilled') renderAlerts(results[3].value);
     if (results[4].status === 'fulfilled') renderPerformance(results[4].value);
-    if (results[5].status === 'fulfilled') renderPortfolio(results[5].value);
+    if (results[5].status === 'fulfilled') hydratePortfolio(results[5].value);
+    else hydratePortfolio(null);
   } catch (err) {
     console.error('Live data load failed', err);
   }
+}
+
+function hydratePortfolio(data) {
+  var holdings = data && Array.isArray(data.holdings) ? data.holdings : [];
+  if (holdings.length) {
+    cachePortfolioPayload(data);
+    renderPortfolio(data);
+    setPortfolioStatus('', 'info');
+    return;
+  }
+  var cached = readPortfolioCache();
+  if (cached) {
+    renderPortfolio(cached);
+    var cachedAt = localStorage.getItem(PORTFOLIO_CACHE_TS_KEY);
+    var msg = 'Backend returned no holdings. Showing your last saved device copy instead.';
+    if (cachedAt) msg += ' Cached on ' + new Date(cachedAt).toLocaleString();
+    setPortfolioStatus(msg, 'warn', '<button class="confirm-btn" style="margin:0;width:100%" onclick="restorePortfolioFromCache()">Restore cached holdings to backend</button>');
+    return;
+  }
+  renderPortfolio(data || { holdings: [], total_cost: 0, total_value: 0, total_pnl: 0, total_pnl_pct: 0 });
+  setPortfolioStatus('No saved portfolio holdings were found yet.', 'info');
 }
 
 function setEngineStatus(message, tone) {
@@ -1151,6 +1220,64 @@ function renderPortfolio(data) {
     return '<div class="hcard" data-portfolio-symbol="' + escapeHtml(symbol) + '" data-avg-price="' + escapeHtml(h.avg_price || 0) + '" data-quantity="' + escapeHtml(h.quantity || 0) + '"><div class="hcard-top"><div><div class="hcard-name">' + escapeHtml(h.name || h.ticker) + '</div><div class="hcard-qty">' + escapeHtml(h.quantity) + ' shares &middot; ' + escapeHtml(h.exchange || 'NSE') + '</div></div><div class="hcard-pnl"><div class="hcard-pnl-val" data-portfolio-pnl style="color:' + pnlColor + '">' + pnlSign + formatRupee(Math.abs(pnl)).replace('₹','₹') + '</div><div data-portfolio-pnl-pct style="font-size:10px;color:' + pnlColor + ';text-align:right">' + pnlSign + Math.abs(pnlPct).toFixed(1) + '%</div></div></div><div class="hcard-bottom"><div class="hstat"><div class="hstat-lbl">Avg Buy</div><div class="hstat-val">' + formatRupee(h.avg_price || 0) + '</div></div><div class="hstat"><div class="hstat-lbl">Current</div><div class="hstat-val" data-portfolio-current>' + formatRupee(h.current_price || 0) + '</div></div><div class="hstat"><div class="hstat-lbl">Cur. Value</div><div class="hstat-val" data-portfolio-value>' + formatRupee(h.current_value || 0) + '</div></div></div></div>';
   }).join('');
   refreshPortfolioIntradayQuotes(holdings);
+}
+
+async function refreshPortfolioNow() {
+  var btn = document.getElementById('portfolio-refresh-btn');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Refreshing...';
+  }
+  setPortfolioStatus('Refreshing saved holdings and latest portfolio prices...', 'info');
+  try {
+    var data = await fetchJSON('/portfolio');
+    hydratePortfolio(data);
+  } catch (err) {
+    console.error('Portfolio refresh failed', err);
+    hydratePortfolio(null);
+    setPortfolioStatus('Portfolio refresh failed. Showing cached holdings if available.', 'warn', readPortfolioCache() ? '<button class="confirm-btn" style="margin:0;width:100%" onclick="restorePortfolioFromCache()">Restore cached holdings to backend</button>' : '');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = 'Refresh';
+    }
+  }
+}
+
+async function restorePortfolioFromCache() {
+  var cached = readPortfolioCache();
+  if (!cached || !Array.isArray(cached.holdings) || !cached.holdings.length) {
+    setPortfolioStatus('No cached holdings are available on this device.', 'error');
+    return;
+  }
+  setPortfolioStatus('Restoring cached holdings to the backend...', 'info');
+  try {
+    var response = await fetch(API_BASE + '/portfolio/confirm-screenshot-holdings?replace_all=true', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(cached.holdings.map(function(h) {
+        return {
+          ticker: h.ticker,
+          name: h.name || h.ticker,
+          exchange: h.exchange || 'NSE',
+          quantity: h.quantity,
+          avg_price: h.avg_price
+        };
+      }))
+    });
+    if (!response.ok) {
+      var msg = 'Portfolio restore failed';
+      try {
+        msg = apiErrorMessage(await response.json(), msg);
+      } catch (_) {}
+      throw new Error(msg);
+    }
+    await refreshPortfolioNow();
+    setPortfolioStatus('Cached holdings were restored to the backend and refreshed.', 'info');
+  } catch (err) {
+    console.error('Portfolio restore failed', err);
+    setPortfolioStatus('Could not restore cached holdings: ' + (err && err.message ? err.message : 'Unknown error'), 'error');
+  }
 }
 
 async function refreshPortfolioIntradayQuotes(holdings) {
