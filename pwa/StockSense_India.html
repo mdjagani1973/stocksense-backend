@@ -275,13 +275,8 @@ body{font-family:'DM Sans',sans-serif;color:var(--text);display:flex;justify-con
   </div>
 
   <div class="sec-label">Daily Schedule</div>
-  <div class="schedule-card">
-    <div class="sched-row"><div class="sched-time">7:00 PM</div><div class="dot done"></div><div class="sched-text">Preliminary scan &mdash; EOD closing data + technicals</div></div>
-    <div class="sched-row"><div class="sched-time">6:00 AM</div><div class="dot done"></div><div class="sched-text">Global pull &mdash; US close, Gift Nifty, FII/DII data</div></div>
-    <div class="sched-row"><div class="sched-time">9:00 AM</div><div class="dot now"></div><div class="sched-text">&#10022; Final picks ready &mdash; 15 min before market open</div></div>
-    <div class="sched-row"><div class="sched-time">11:00 AM</div><div class="dot later"></div><div class="sched-text">Mid-session scan &mdash; alert if pick moves &gt;2%</div></div>
-    <div class="sched-row"><div class="sched-time">1:30 PM</div><div class="dot later"></div><div class="sched-text">Afternoon scan update</div></div>
-    <div class="sched-row"><div class="sched-time">3:45 PM</div><div class="dot later"></div><div class="sched-text">EOD summary &mdash; how did picks perform today?</div></div>
+  <div class="schedule-card" id="daily-schedule-card">
+    <div class="sched-row"><div class="sched-time">Loading</div><div class="dot now"></div><div class="sched-text">Building today&apos;s schedule...</div></div>
   </div>
   <div class="status-banner" id="engine-status-banner">Manual engine status will appear here.</div>
 
@@ -827,6 +822,52 @@ function buildPickCard(pick) {
     </div>`;
 }
 
+function formatDisplayDate(dateText) {
+  if (!dateText) return 'Unknown date';
+  var parts = String(dateText).split('-');
+  if (parts.length !== 3) return String(dateText);
+  return parts[2] + '-' + parts[1] + '-' + parts[0];
+}
+
+function latestAvailablePickSet(todayData, historyData) {
+  var todayBuy = todayData && Array.isArray(todayData.buy_picks) ? todayData.buy_picks : [];
+  var todaySell = todayData && Array.isArray(todayData.sell_picks) ? todayData.sell_picks : [];
+  if (todayBuy.length || todaySell.length) {
+    return {
+      date: todayData.date || '',
+      buy_picks: todayBuy,
+      sell_picks: todaySell,
+      total: (todayData && typeof todayData.total === 'number') ? todayData.total : (todayBuy.length + todaySell.length),
+      generated_at: todayData && todayData.generated_at ? todayData.generated_at : null,
+      fallback: false
+    };
+  }
+  var historyPicks = historyData && Array.isArray(historyData.picks) ? historyData.picks : [];
+  if (!historyPicks.length) {
+    return {
+      date: todayData && todayData.date ? todayData.date : '',
+      buy_picks: [],
+      sell_picks: [],
+      total: 0,
+      generated_at: null,
+      fallback: false
+    };
+  }
+  var latestDate = historyPicks.reduce(function(latest, pick) {
+    if (!pick || !pick.date) return latest;
+    return !latest || String(pick.date) > String(latest) ? pick.date : latest;
+  }, '');
+  var latestPicks = historyPicks.filter(function(pick) { return pick && pick.date === latestDate; });
+  return {
+    date: latestDate,
+    buy_picks: latestPicks.filter(function(pick) { return pick.direction === 'buy'; }),
+    sell_picks: latestPicks.filter(function(pick) { return pick.direction === 'sell'; }),
+    total: latestPicks.length,
+    generated_at: latestPicks.length ? latestPicks[0].created_at : null,
+    fallback: true
+  };
+}
+
 function renderHomePicks(data) {
   const root = document.getElementById('home-live-sections');
   if (!root || !data) return;
@@ -834,6 +875,10 @@ function renderHomePicks(data) {
   const sellPicks = Array.isArray(data.sell_picks) ? data.sell_picks : [];
   const buyMarkup = buyPicks.length ? buyPicks.map(buildPickCard).join('') : '<div class="schedule-card"><div class="sched-text">No buy picks generated for this date.</div></div>';
   const sellMarkup = sellPicks.length ? sellPicks.map(buildPickCard).join('') : '<div class="schedule-card"><div class="sched-text">No sell picks generated for this date.</div></div>';
+  const labelDate = formatDisplayDate(data.date || '');
+  const note = data.fallback
+    ? 'Showing latest available picks from ' + escapeHtml(labelDate) + '. Pick levels stay fixed from the engine. Live current prices refresh in the browser.'
+    : 'Showing picks for ' + escapeHtml(labelDate) + '. Pick levels stay fixed from the engine. Live current prices refresh in the browser.';
   root.innerHTML = `
     <div class="picks-hdr">
       <div class="picks-title">Buy Candidates</div>
@@ -845,7 +890,7 @@ function renderHomePicks(data) {
       <div class="count-badge sell">${sellPicks.length} pick${sellPicks.length === 1 ? '' : 's'}</div>
     </div>
     ${sellMarkup}
-    <div class="disclaimer">Pick levels stay fixed from the engine. Live current prices refresh in the browser for ${escapeHtml(data.date || '')}.</div>`;
+    <div class="disclaimer">${note}</div>`;
   refreshIntradayPickQuotes(buyPicks.concat(sellPicks));
 }
 
@@ -1126,7 +1171,13 @@ async function loadLiveData() {
     ]);
     if (results[0].status === 'fulfilled') renderMarketStatus(results[0].value);
     if (results[1].status === 'fulfilled') renderGlobalBar(results[1].value);
-    if (results[2].status === 'fulfilled') renderHomePicks(results[2].value);
+    if (results[0].status === 'fulfilled') renderDailySchedule(results[0].value);
+    else renderDailySchedule(null);
+    if (results[2].status === 'fulfilled' || results[4].status === 'fulfilled') {
+      var todayPayload = results[2].status === 'fulfilled' ? results[2].value : null;
+      var historyPayload = results[4].status === 'fulfilled' ? results[4].value : null;
+      renderHomePicks(latestAvailablePickSet(todayPayload, historyPayload));
+    }
     if (results[3].status === 'fulfilled') renderAlerts(results[3].value);
     if (results[4].status === 'fulfilled') renderPerformance(results[4].value);
     if (results[5].status === 'fulfilled') hydratePortfolio(results[5].value);
@@ -1231,6 +1282,64 @@ function renderMarketStatus(data) {
     var nextText = data && data.is_open ? 'Closes: ' + data.closes_at : 'Next open: ' + data.opens_at;
     sub.textContent = (data && data.day ? data.day : 'Market') + ' · ' + nextText;
   }
+}
+
+function getIstNowParts() {
+  var formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  });
+  var map = {};
+  formatter.formatToParts(new Date()).forEach(function(part) {
+    if (part.type !== 'literal') map[part.type] = part.value;
+  });
+  return {
+    year: Number(map.year),
+    month: Number(map.month),
+    day: Number(map.day),
+    hour: Number(map.hour),
+    minute: Number(map.minute)
+  };
+}
+
+function renderDailySchedule() {
+  var root = document.getElementById('daily-schedule-card');
+  if (!root) return;
+  var slots = [
+    { time: '7:00 PM', key: '19:00', text: 'Preliminary scan — EOD closing data + technicals' },
+    { time: '6:00 AM', key: '06:00', text: 'Global pull — US close, Gift Nifty, FII/DII data' },
+    { time: '9:00 AM', key: '09:00', text: '✦ Final picks ready — 15 min before market open' },
+    { time: '11:00 AM', key: '11:00', text: 'Mid-session scan — alert if pick moves >2%' },
+    { time: '1:30 PM', key: '13:30', text: 'Afternoon scan update' },
+    { time: '3:45 PM', key: '15:45', text: 'EOD summary — how did picks perform today?' }
+  ];
+  var now = getIstNowParts();
+  var currentMinutes = now.hour * 60 + now.minute;
+  var stateByKey;
+  if (currentMinutes < 360) {
+    stateByKey = { '19:00': 'done', '06:00': 'now', '09:00': 'later', '11:00': 'later', '13:30': 'later', '15:45': 'later' };
+  } else if (currentMinutes < 540) {
+    stateByKey = { '19:00': 'done', '06:00': 'done', '09:00': 'now', '11:00': 'later', '13:30': 'later', '15:45': 'later' };
+  } else if (currentMinutes < 660) {
+    stateByKey = { '19:00': 'done', '06:00': 'done', '09:00': 'done', '11:00': 'now', '13:30': 'later', '15:45': 'later' };
+  } else if (currentMinutes < 810) {
+    stateByKey = { '19:00': 'done', '06:00': 'done', '09:00': 'done', '11:00': 'done', '13:30': 'now', '15:45': 'later' };
+  } else if (currentMinutes < 945) {
+    stateByKey = { '19:00': 'done', '06:00': 'done', '09:00': 'done', '11:00': 'done', '13:30': 'done', '15:45': 'now' };
+  } else if (currentMinutes < 1140) {
+    stateByKey = { '19:00': 'now', '06:00': 'done', '09:00': 'done', '11:00': 'done', '13:30': 'done', '15:45': 'done' };
+  } else {
+    stateByKey = { '19:00': 'done', '06:00': 'now', '09:00': 'later', '11:00': 'later', '13:30': 'later', '15:45': 'later' };
+  }
+  root.innerHTML = slots.map(function(slot) {
+    var cls = stateByKey[slot.key] || 'later';
+    return '<div class="sched-row"><div class="sched-time">' + escapeHtml(slot.time) + '</div><div class="dot ' + cls + '"></div><div class="sched-text">' + escapeHtml(slot.text) + '</div></div>';
+  }).join('');
 }
 
 function renderGlobalBar(data) {
