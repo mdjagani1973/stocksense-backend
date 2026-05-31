@@ -759,11 +759,25 @@ function formatResult(pick) {
       color: pick.actual_result_pct >= 0 ? 'var(--green)' : 'var(--red)'
     };
   }
-  const status = (pick.status || 'open').replace(/_/g, ' ');
-  const openLike = pick.status === 'open' || !pick.status;
+  const statusKey = pick.status || 'pending';
+  const status = statusKey.replace(/_/g, ' ');
+  const labelMap = {
+    pending: 'Entry Pending',
+    open: 'Entry Triggered',
+    missed_move: 'Missed Move',
+    expired: 'Expired'
+  };
+  const colorMap = {
+    pending: 'var(--text2)',
+    open: 'var(--blue)',
+    target_hit: 'var(--green)',
+    stoploss_hit: 'var(--red)',
+    missed_move: '#f5b24f',
+    expired: 'var(--text2)'
+  };
   return {
-    text: openLike ? 'Open' : status.charAt(0).toUpperCase() + status.slice(1),
-    color: openLike ? 'var(--text2)' : (pick.status === 'target_hit' ? 'var(--green)' : 'var(--red)')
+    text: labelMap[statusKey] || (status.charAt(0).toUpperCase() + status.slice(1)),
+    color: colorMap[statusKey] || 'var(--text2)'
   };
 }
 
@@ -900,6 +914,9 @@ function renderHomePicks(data) {
   const note = data.fallback
     ? 'Showing latest available picks from ' + escapeHtml(labelDate) + '. Pick levels stay fixed from the engine. Live current prices refresh in the browser.'
     : 'Showing picks for ' + escapeHtml(labelDate) + '. Pick levels stay fixed from the engine. Live current prices refresh in the browser.';
+  const quietNote = buyPicks.length < 2
+    ? '<div class="disclaimer" style="margin-top:8px">Strict swing filters found only ' + escapeHtml(String(buyPicks.length)) + ' buy setup' + (buyPicks.length === 1 ? '' : 's') + ' for this run. Quiet days are expected under quality-first mode.</div>'
+    : '';
   const sellNote = data.hidden_sell_count
     ? '<div class="disclaimer" style="margin-top:8px">Hidden ' + escapeHtml(String(data.hidden_sell_count)) + ' market-wide sell candidate' + (data.hidden_sell_count === 1 ? '' : 's') + ' because Sell is portfolio-linked in this app.</div>'
     : '';
@@ -918,6 +935,7 @@ function renderHomePicks(data) {
     </div>
     ${sellMarkup}
     <div class="disclaimer">${note}</div>
+    ${quietNote}
     ${sellNote}`;
   refreshIntradayPickQuotes(buyPicks.concat(sellPicks));
 }
@@ -925,6 +943,8 @@ function renderHomePicks(data) {
 function alertIconClass(alertType) {
   if (alertType === 'critical' || alertType === 'stoploss') return 'r';
   if (alertType === 'picks_ready' || alertType === 'target_hit' || alertType === 'intraday_move') return 'g';
+  if (alertType === 'entry_triggered') return 'b';
+  if (alertType === 'missed_move' || alertType === 'quiet_market') return 'a';
   if (alertType === 'global_update') return 'b';
   return 'a';
 }
@@ -951,7 +971,7 @@ function buildScheduledAlertEntries() {
     entries.push({
       alert_type: 'intraday_move',
       title: '11:00 AM mid-session scan window',
-      desc: 'Review Home for live pick prices. Separate intraday move logging is not fully wired yet.',
+      desc: 'Review Home and Alerts for entry-trigger, missed-move, target-touch, and stop-loss events as they are logged.',
       atime: '11:00 AM'
     });
   }
@@ -1017,13 +1037,13 @@ function renderPerformance(data) {
   }, null) : null;
 
   document.getElementById('perf-win-rate').textContent = (stats.win_rate_pct || 0) + '%';
-  document.getElementById('perf-win-rate-sub').textContent = (stats.target_hits || 0) + ' target hits from ' + (stats.total || 0) + ' picks';
+  document.getElementById('perf-win-rate-sub').textContent = (stats.target_hits || 0) + ' target hits from ' + (stats.closed || 0) + ' closed picks';
   document.getElementById('perf-avg-return').textContent = avgWin == null ? '--' : '+' + avgWin.toFixed(1) + '%';
   document.getElementById('perf-avg-return-sub').textContent = wins.length ? 'Across ' + wins.length + ' winning trades' : 'No closed winning trades yet';
   document.getElementById('perf-avg-loss').innerHTML = avgLoss == null ? '--' : '&minus;' + Math.abs(avgLoss).toFixed(1) + '%';
   document.getElementById('perf-avg-loss-sub').textContent = losses.length ? 'Across ' + losses.length + ' stopped trades' : 'No closed losing trades yet';
   document.getElementById('perf-best-pick').textContent = bestPick ? (bestPick.actual_result_pct > 0 ? '+' : '') + bestPick.actual_result_pct.toFixed(1) + '%' : '--';
-  document.getElementById('perf-best-pick-sub').textContent = bestPick ? bestPick.ticker + ' · ' + bestPick.date : 'No closed picks yet';
+  document.getElementById('perf-best-pick-sub').textContent = bestPick ? bestPick.ticker + ' · ' + bestPick.date : ((stats.pending || stats.open || stats.missed_move) ? (stats.pending || 0) + ' pending · ' + (stats.open || 0) + ' active · ' + (stats.missed_move || 0) + ' missed' : 'No closed picks yet');
 
   const rows = picks.length ? picks.map(function(pick) {
     const result = formatResult(pick);

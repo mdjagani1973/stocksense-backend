@@ -8,11 +8,18 @@ import sqlite3
 from datetime import datetime
 from dataclasses import dataclass, asdict, field
 from typing import Optional
+from statistics import median
 
 from config.settings import (
-    IST, WEIGHTS, MAX_PICKS, STOPLOSS_PCT, MIN_RR_RATIO,
+    IST, WEIGHTS, MAX_PICKS, MIN_PICKS, STOPLOSS_PCT, MIN_RR_RATIO,
     HOLD_SESSIONS_MIN, HOLD_SESSIONS_MAX, DB_PATH,
     MIN_TECH_PATTERN_SCORE, COMPOSITE_MIN_SCORE,
+    MIN_STOPLOSS_PCT, MAX_STOPLOSS_PCT, ATR_STOPLOSS_MULT, ATR_TARGET_MULT,
+    TARGET_PCT_MIN, TARGET_PCT_MAX, RELATIVE_STRENGTH_MIN_PCT,
+    RELATIVE_STRENGTH_BONUS_PCT, MARKET_REGIME_SAMPLE,
+    REGIME_RISK_ON_BREADTH20, REGIME_CAUTION_BREADTH20,
+    REGIME_RISK_ON_RETURN20, REGIME_RISK_OFF_RETURN20,
+    EMA_SHORT, EMA_LONG,
 )
 from data.fetcher import (
     fetch_ohlcv, fetch_current_price, fetch_news_sentiment,
@@ -38,6 +45,8 @@ class StockRecommendation:
     institutional_pct: float = 0.0; revenue_growth_pct: float = 0.0
     roe_pct: float = 0.0; pe_ratio: float = 0.0
     fundamental_summary: str = ""; fundamental_signals: list = field(default_factory=list)
+    regime_label: str = ""; regime_score: float = 0.0
+    relative_strength_pct: float = 0.0; atr_pct: float = 0.0
     created_at: str = ""; date: str = ""
 
     def to_dict(self):
@@ -90,7 +99,77 @@ def compute_composite_score(tech, pattern, sentiment, fund, fii_data):
     return min(composite, 1.0), " · ".join(parts[:4]), breakdown
 
 
-def analyse_stock(ticker: str, fii_data: dict, global_ctx: dict) -> Optional[StockRecommendation]:
+def _safe_return_pct(df, lookback: int = 20) -> Optional[float]:
+    try:
+        if df.empty or len(df) <= lookback:
+            return None
+        start = float(df["Close"].iloc[-(lookback + 1)])
+        end = float(df["Close"].iloc[-1])
+        if start <= 0:
+            return None
+        return round((end / start - 1) * 100, 2)
+    except Exception:
+        return None
+
+
+def assess_market_regime(universe: list[str]) -> dict:
+    sample = []
+    breadth20 = 0
+    breadth50 = 0
+    returns20 = []
+    for ticker in universe[:MARKET_REGIME_SAMPLE]:
+        df = fetch_ohlcv(ticker, period="3mo", interval="1d")
+        if df.empty or len(df) < 55:
+            continue
+        df = compute_indicators(df)
+        row = df.iloc[-1]
+        close = float(row["Close"])
+        ema20 = float(row.get(f"ema{EMA_SHORT}", close))
+        ema50 = float(row.get(f"ema{EMA_LONG}", close))
+        ret20 = _safe_return_pct(df, 20)
+        if ret20 is None:
+            continue
+        sample.append(ticker)
+        returns20.append(ret20)
+        breadth20 += 1 if close > ema20 else 0
+        breadth50 += 1 if close > ema50 else 0
+
+    counted = len(sample)
+    if counted < 8:
+        return {
+            "label": "neutral",
+            "score": 0.5,
+            "breadth20": 0.5,
+            "breadth50": 0.5,
+            "benchmark_return20": 0.0,
+            "summary": "Regime fallback: insufficient breadth sample",
+        }
+
+    breadth20_pct = breadth20 / counted
+    breadth50_pct = breadth50 / counted
+    benchmark_return20 = round(median(returns20), 2)
+    normalized_return = min(max((benchmark_return20 + 5) / 10, 0), 1)
+    regime_score = round((breadth20_pct * 0.5) + (breadth50_pct * 0.3) + (normalized_return * 0.2), 3)
+
+    if breadth20_pct >= REGIME_RISK_ON_BREADTH20 and benchmark_return20 >= REGIME_RISK_ON_RETURN20:
+        label = "risk_on"
+    elif breadth20_pct <= REGIME_CAUTION_BREADTH20 or benchmark_return20 <= REGIME_RISK_OFF_RETURN20:
+        label = "risk_off"
+    else:
+        label = "cautious"
+
+    summary = f"Regime {label.replace('_', ' ')} · breadth20 {breadth20_pct:.0%} · breadth50 {breadth50_pct:.0%} · median20d {benchmark_return20:+.1f}%"
+    return {
+        "label": label,
+        "score": regime_score,
+        "breadth20": round(breadth20_pct, 3),
+        "breadth50": round(breadth50_pct, 3),
+        "benchmark_return20": benchmark_return20,
+        "summary": summary,
+    }
+
+
+def analyse_stock(ticker: str, fii_data: dict, global_ctx: dict, market_regime: dict) -> Optional[StockRecommendation]:
     try:
         # 1. FUNDAMENTAL GATE — runs first, reject ~65% of universe here
         fund = run_fundamental_analysis(ticker)
@@ -105,6 +184,7 @@ def analyse_stock(ticker: str, fii_data: dict, global_ctx: dict) -> Optional[Sto
         tech = detect_signals(df)
         pattern = detect_patterns(df)
         direction = tech.get("direction", "neutral")
+        relative_strength_pct = (_safe_return_pct(df, 20) or 0.0) - float(market_regime.get("benchmark_return20", 0.0) or 0.0)
         if direction == "neutral":
             return _reject(
                 ticker,
@@ -125,6 +205,21 @@ def analyse_stock(ticker: str, fii_data: dict, global_ctx: dict) -> Optional[Sto
                 pattern_score=round(pattern.get("score", 0), 3),
                 direction=direction,
             )
+        if direction == "buy" and relative_strength_pct < RELATIVE_STRENGTH_MIN_PCT:
+            return _reject(
+                ticker,
+                "relative strength too weak for long swing",
+                rs=round(relative_strength_pct, 2),
+                regime=market_regime.get("label"),
+            )
+        if direction == "buy" and market_regime.get("label") == "risk_off" and tech.get("score", 0) < 0.6:
+            return _reject(
+                ticker,
+                "buy rejected in risk-off regime without exceptional strength",
+                tech_score=round(tech.get("score", 0), 3),
+                rs=round(relative_strength_pct, 2),
+                regime=market_regime.get("label"),
+            )
 
         # 3. Current price
         info = fetch_current_price(ticker)
@@ -136,6 +231,28 @@ def analyse_stock(ticker: str, fii_data: dict, global_ctx: dict) -> Optional[Sto
 
         # 5. Composite score
         composite, reason, breakdown = compute_composite_score(tech, pattern, sentiment, fund, fii_data)
+        if direction == "buy":
+            if relative_strength_pct >= RELATIVE_STRENGTH_BONUS_PCT:
+                composite += 0.03
+                breakdown["rs_bonus"] = 0.03
+            else:
+                breakdown["rs_bonus"] = 0.0
+            if market_regime.get("label") == "cautious":
+                composite -= 0.02
+                breakdown["regime_adjustment"] = -0.02
+            else:
+                breakdown["regime_adjustment"] = 0.0
+        elif direction == "sell":
+            if relative_strength_pct <= -RELATIVE_STRENGTH_BONUS_PCT:
+                composite += 0.02
+                breakdown["rs_bonus"] = 0.02
+            else:
+                breakdown["rs_bonus"] = 0.0
+            if market_regime.get("label") == "risk_off":
+                composite += 0.02
+                breakdown["regime_adjustment"] = 0.02
+            else:
+                breakdown["regime_adjustment"] = 0.0
         if composite < COMPOSITE_MIN_SCORE:
             return _reject(
                 ticker,
@@ -149,14 +266,16 @@ def analyse_stock(ticker: str, fii_data: dict, global_ctx: dict) -> Optional[Sto
 
         # 6. Prices
         entry = float(info.get("price") or tech["entry_price"])
-        target_pct = tech.get("target_pct", 4.0)
+        atr_pct = float(tech.get("atr_pct", 0.0) or 0.0)
+        stoploss_pct = min(max(max(STOPLOSS_PCT, atr_pct * ATR_STOPLOSS_MULT), MIN_STOPLOSS_PCT), MAX_STOPLOSS_PCT)
+        target_pct = min(max(max(float(tech.get("target_pct", 4.0) or 4.0), TARGET_PCT_MIN), atr_pct * ATR_TARGET_MULT), TARGET_PCT_MAX)
         if direction == "buy":
             target = round(entry * (1 + target_pct / 100), 2)
-            stoploss = round(entry * (1 - STOPLOSS_PCT / 100), 2)
+            stoploss = round(entry * (1 - stoploss_pct / 100), 2)
             entry_low, entry_high = round(entry * 0.995, 2), round(entry * 1.005, 2)
         else:
             target = round(entry * (1 - target_pct / 100), 2)
-            stoploss = round(entry * (1 + STOPLOSS_PCT / 100), 2)
+            stoploss = round(entry * (1 + stoploss_pct / 100), 2)
             entry_low = entry_high = entry
 
         rr = round(abs(target - entry) / abs(stoploss - entry), 1) if abs(stoploss - entry) > 0 else 0
@@ -166,7 +285,7 @@ def analyse_stock(ticker: str, fii_data: dict, global_ctx: dict) -> Optional[Sto
                 "risk-reward below threshold",
                 rr=rr,
                 target_pct=round(target_pct, 2),
-                stoploss_pct=STOPLOSS_PCT,
+                stoploss_pct=round(stoploss_pct, 2),
                 direction=direction,
             )
 
@@ -187,17 +306,20 @@ def analyse_stock(ticker: str, fii_data: dict, global_ctx: dict) -> Optional[Sto
             notes.append(f"Crude {crude.get('change_pct', 0):+.1f}%")
         usdinr = global_ctx.get("usdinr", {})
         if usdinr: notes.append(f"₹/USD {usdinr.get('value', 84):.2f}")
-        global_note = " · ".join(notes[:2]) or "Global markets stable"
+        notes.append(market_regime.get("summary", ""))
+        global_note = " · ".join([n for n in notes if n][:3]) or "Global markets stable"
+        reason_bits = [reason, f"RS {relative_strength_pct:+.1f}%", market_regime.get("label", "").replace("_", " ")]
+        enriched_reason = " · ".join([bit for bit in reason_bits if bit])
 
         recommendation = StockRecommendation(
             ticker=clean, name=info.get("name", clean), exchange=exchange,
             direction=direction, entry_price=entry, entry_low=entry_low,
             entry_high=entry_high, target_price=target, target_pct=round(target_pct, 1),
-            stoploss_price=stoploss, stoploss_pct=STOPLOSS_PCT, rr_ratio=rr,
+            stoploss_price=stoploss, stoploss_pct=round(stoploss_pct, 2), rr_ratio=rr,
             confidence_pct=int(composite * 100),
             hold_sessions=f"{HOLD_SESSIONS_MIN}–{HOLD_SESSIONS_MAX} sessions",
-            reason=reason,
-            signals=tech.get("signals", []) + pattern.get("patterns", []) + fund.get("signals", []),
+            reason=enriched_reason,
+            signals=tech.get("signals", []) + pattern.get("patterns", []) + fund.get("signals", []) + [f"Market regime: {market_regime.get('label', 'neutral').replace('_', ' ')}", f"Relative strength {relative_strength_pct:+.1f}%"],
             global_context=global_note, sector=info.get("sector", "Unknown"),
             market_cap_cr=round((info.get("market_cap", 0) or 0) / 1e7, 0),
             rsi=round(tech.get("rsi", 50), 1), vol_ratio=round(tech.get("vol_ratio", 1), 2),
@@ -210,6 +332,10 @@ def analyse_stock(ticker: str, fii_data: dict, global_ctx: dict) -> Optional[Sto
             roe_pct=fi.get("roe_pct", 0), pe_ratio=fi.get("pe_ratio") or 0,
             fundamental_summary=fund.get("summary", ""),
             fundamental_signals=fund.get("signals", []),
+            regime_label=market_regime.get("label", ""),
+            regime_score=market_regime.get("score", 0),
+            relative_strength_pct=round(relative_strength_pct, 2),
+            atr_pct=round(atr_pct, 2),
             created_at=datetime.now(IST).isoformat(),
             date=datetime.now(IST).strftime("%Y-%m-%d"),
         )
@@ -235,10 +361,12 @@ def run_engine(mode: str = "eod") -> list:
     global_ctx = fetch_global_context()
     fii_data   = fetch_fii_dii()
     universe   = screen_universe()
+    market_regime = assess_market_regime(universe)
     logger.info(f"Universe: {len(universe)} stocks. Running fundamental gate first...")
+    logger.info("Market regime assessment: %s", market_regime.get("summary"))
     candidates = []
     for ticker in universe:
-        recommendation = analyse_stock(ticker, fii_data, global_ctx)
+        recommendation = analyse_stock(ticker, fii_data, global_ctx, market_regime)
         if recommendation:
             candidates.append(recommendation)
     logger.info(f"Candidates after scoring: {len(candidates)}")
@@ -258,6 +386,18 @@ def run_engine(mode: str = "eod") -> list:
         if len(final_picks) >= MAX_PICKS: break
     logger.info(f"Final picks: {len(final_picks)} (candidates={len(candidates)}, sector_capped={sector_capped})")
     save_picks(final_picks)
+    if len(final_picks) < MIN_PICKS:
+        try:
+            from utils.alerts import send_alert
+            send_alert(
+                alert_type="quiet_market",
+                ticker="MARKET",
+                title="Quality filters kept today quiet",
+                message=f"Only {len(final_picks)} pick(s) passed strict swing filters. {market_regime.get('summary', 'Market regime cautious.')}",
+                priority="low",
+            )
+        except Exception as exc:
+            logger.warning("Quiet-market alert failed: %s", exc)
     return final_picks
 
 
@@ -275,8 +415,10 @@ def init_db():
             promoter_pct REAL, debt_to_equity REAL, institutional_pct REAL,
             revenue_growth_pct REAL, roe_pct REAL, pe_ratio REAL,
             fundamental_summary TEXT, fundamental_signals TEXT,
+            regime_label TEXT, regime_score REAL, relative_strength_pct REAL, atr_pct REAL,
             created_at TEXT, date TEXT,
-            status TEXT DEFAULT 'open', actual_result_pct REAL)""")
+            status TEXT DEFAULT 'pending', actual_result_pct REAL,
+            entry_triggered_at TEXT, exit_triggered_at TEXT, lifecycle_note TEXT)""")
         conn.execute("""CREATE TABLE IF NOT EXISTS portfolio (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             ticker TEXT, name TEXT, exchange TEXT,
@@ -284,6 +426,19 @@ def init_db():
         conn.execute("""CREATE TABLE IF NOT EXISTS alerts_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             ticker TEXT, alert_type TEXT, message TEXT, created_at TEXT)""")
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(picks)").fetchall()}
+        migrations = {
+            "regime_label": "ALTER TABLE picks ADD COLUMN regime_label TEXT",
+            "regime_score": "ALTER TABLE picks ADD COLUMN regime_score REAL DEFAULT 0",
+            "relative_strength_pct": "ALTER TABLE picks ADD COLUMN relative_strength_pct REAL DEFAULT 0",
+            "atr_pct": "ALTER TABLE picks ADD COLUMN atr_pct REAL DEFAULT 0",
+            "entry_triggered_at": "ALTER TABLE picks ADD COLUMN entry_triggered_at TEXT",
+            "exit_triggered_at": "ALTER TABLE picks ADD COLUMN exit_triggered_at TEXT",
+            "lifecycle_note": "ALTER TABLE picks ADD COLUMN lifecycle_note TEXT",
+        }
+        for column, statement in migrations.items():
+            if column not in columns:
+                conn.execute(statement)
         conn.commit()
 
 def save_picks(picks):
@@ -293,6 +448,11 @@ def save_picks(picks):
         logger.info(f"Cleared {deleted} existing picks for {run_date} before saving latest engine output")
         for p in picks:
             d = p.to_dict()
+            d["status"] = "pending"
+            d["actual_result_pct"] = None
+            d["entry_triggered_at"] = None
+            d["exit_triggered_at"] = None
+            d["lifecycle_note"] = ""
             conn.execute(f"INSERT INTO picks ({','.join(d)}) VALUES ({','.join(['?']*len(d))})",
                          list(d.values()))
         conn.commit()
@@ -312,6 +472,18 @@ def get_pick_history(limit=30):
 
 def update_pick_status(pick_id, status, result_pct=None):
     with sqlite3.connect(DB_PATH) as conn:
-        conn.execute("UPDATE picks SET status=?, actual_result_pct=? WHERE id=?",
-                     (status, result_pct, pick_id))
+        now = datetime.now(IST).isoformat()
+        extra = {}
+        if status == "open":
+            extra["entry_triggered_at"] = now
+        elif status in {"target_hit", "stoploss_hit", "expired", "missed_move"}:
+            extra["exit_triggered_at"] = now
+
+        set_clause = "status=?, actual_result_pct=?"
+        values = [status, result_pct]
+        for key, value in extra.items():
+            set_clause += f", {key}=?"
+            values.append(value)
+        values.append(pick_id)
+        conn.execute(f"UPDATE picks SET {set_clause} WHERE id=?", values)
         conn.commit()

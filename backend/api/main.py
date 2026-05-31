@@ -130,13 +130,21 @@ def pick_history(limit: int = Query(default=30, le=100)):
     total  = len(picks)
     hits   = [p for p in picks if p.get("status") == "target_hit"]
     stops  = [p for p in picks if p.get("status") == "stoploss_hit"]
-    win_rate = round(len(hits) / total * 100, 1) if total else 0
+    pending = [p for p in picks if p.get("status") == "pending"]
+    open_positions = [p for p in picks if p.get("status") == "open"]
+    missed = [p for p in picks if p.get("status") == "missed_move"]
+    closed = hits + stops
+    win_rate = round(len(hits) / len(closed) * 100, 1) if closed else 0
     return {
         "picks": picks,
         "stats": {
             "total": total,
             "target_hits": len(hits),
             "stoploss_hits": len(stops),
+            "pending": len(pending),
+            "open": len(open_positions),
+            "missed_move": len(missed),
+            "closed": len(closed),
             "win_rate_pct": win_rate,
         }
     }
@@ -145,7 +153,7 @@ def pick_history(limit: int = Query(default=30, le=100)):
 @app.patch("/picks/{pick_id}/status")
 def update_status(pick_id: int, update: PickStatusUpdate):
     from engine.recommender import update_pick_status
-    valid = {"target_hit", "stoploss_hit", "expired", "open"}
+    valid = {"pending", "open", "target_hit", "stoploss_hit", "missed_move", "expired"}
     if update.status not in valid:
         raise HTTPException(400, f"Status must be one of {valid}")
     update_pick_status(pick_id, update.status, update.result_pct)

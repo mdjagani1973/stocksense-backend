@@ -14,6 +14,8 @@ from config.settings import (
     VOLUME_SPIKE_MULT,
     MACD_SIGNAL_WINDOW,
     TECHNICAL_DIRECTION_MIN_SCORE,
+    TARGET_PCT_MIN, TARGET_PCT_MAX,
+    ATR_TARGET_MULT,
 )
 
 logger = logging.getLogger("stocksense.technical")
@@ -171,16 +173,24 @@ def detect_signals(df: pd.DataFrame) -> dict:
     # ── EMA Trend Signal ──────────────────────────────────────────────────────
     ema20 = _value_or_default(row.get(f"ema{EMA_SHORT}", close), close)
     ema50 = _value_or_default(row.get(f"ema{EMA_LONG}", close), close)
+    prev_ema20 = _value_or_default(prev.get(f"ema{EMA_SHORT}", close), close)
+    prev_ema50 = _value_or_default(prev.get(f"ema{EMA_LONG}", close), close)
 
     if close > ema20 > ema50:
         signals_buy.append(f"Price above EMA{EMA_SHORT} & EMA{EMA_LONG} — uptrend")
         score_buy += 0.15
+        if ema20 > prev_ema20 and ema50 >= prev_ema50:
+            signals_buy.append("Short and medium trend slopes rising")
+            score_buy += 0.05
     elif close > ema20:
         signals_buy.append(f"Price above EMA{EMA_SHORT}")
         score_buy += 0.08
     elif close < ema20 < ema50:
         signals_sell.append(f"Price below EMA{EMA_SHORT} & EMA{EMA_LONG} — downtrend")
         score_sell += 0.15
+        if ema20 < prev_ema20 and ema50 <= prev_ema50:
+            signals_sell.append("Short and medium trend slopes falling")
+            score_sell += 0.05
 
     # ── Bollinger Band Signal ─────────────────────────────────────────────────
     bb_pct   = _value_or_default(row.get("bb_pct", 0.5), 0.5)
@@ -226,10 +236,11 @@ def detect_signals(df: pd.DataFrame) -> dict:
 
     # ── Decide Direction ──────────────────────────────────────────────────────
     atr = _value_or_default(row.get("atr", close * 0.015), close * 0.015)
+    atr_pct = (atr / close * 100) if close > 0 else 0.0
 
     if score_buy >= score_sell and score_buy >= TECHNICAL_DIRECTION_MIN_SCORE:
         # Estimate target based on ATR and historical resistance
-        target_pct = min(max(_estimate_target_pct(df, "buy"), 3.0), 6.0)
+        target_pct = min(max(_estimate_target_pct(df, "buy"), TARGET_PCT_MIN), TARGET_PCT_MAX)
         return {
             "direction":   "buy",
             "score":       min(score_buy, 1.0),
@@ -240,13 +251,14 @@ def detect_signals(df: pd.DataFrame) -> dict:
             "entry_price": close,
             "target_pct":  target_pct,
             "atr":         atr,
+            "atr_pct":     atr_pct,
             "rsi":         rsi,
             "vol_ratio":   vol_ratio,
             "macd":        macd,
             "macd_sig":    macd_sig,
         }
     elif score_sell > score_buy and score_sell >= TECHNICAL_DIRECTION_MIN_SCORE:
-        target_pct = min(max(_estimate_target_pct(df, "sell"), 3.0), 6.0)
+        target_pct = min(max(_estimate_target_pct(df, "sell"), TARGET_PCT_MIN), TARGET_PCT_MAX)
         return {
             "direction":   "sell",
             "score":       min(score_sell, 1.0),
@@ -257,6 +269,7 @@ def detect_signals(df: pd.DataFrame) -> dict:
             "entry_price": close,
             "target_pct":  target_pct,
             "atr":         atr,
+            "atr_pct":     atr_pct,
             "rsi":         rsi,
             "vol_ratio":   vol_ratio,
             "macd":        macd,
@@ -279,8 +292,11 @@ def _estimate_target_pct(df: pd.DataFrame, direction: str) -> float:
     try:
         recent = df.tail(20)
         avg_range = ((recent["High"] - recent["Low"]) / recent["Close"]).mean() * 100
-        # Target is ~2× average daily range, capped at 6%
-        return round(min(avg_range * 2.5, 6.0), 1)
+        latest_close = _value_or_default(recent["Close"].iloc[-1], 0.0)
+        latest_atr = _value_or_default(recent["atr"].iloc[-1] if "atr" in recent.columns else 0.0, 0.0)
+        atr_pct = (latest_atr / latest_close * 100) if latest_close > 0 else 0.0
+        structural_target = max(avg_range * 2.2, atr_pct * ATR_TARGET_MULT)
+        return round(min(max(structural_target, TARGET_PCT_MIN), TARGET_PCT_MAX), 1)
     except Exception:
         return 4.0
 
@@ -294,6 +310,7 @@ def _empty_signal(price: float = 0) -> dict:
         "entry_price": price,
         "target_pct":  0.0,
         "atr":         0.0,
+        "atr_pct":     0.0,
         "rsi":         50,
         "vol_ratio":   1.0,
     }
