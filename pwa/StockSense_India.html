@@ -260,6 +260,12 @@ body{font-family:'DM Sans',sans-serif;color:var(--text);display:flex;justify-con
     <div class="header-sub" id="home-market-sub">Loading live market status...</div>
   </div>
 
+  <div class="source-tabs" style="margin:0 16px 12px" id="home-strategy-tabs">
+    <button class="source-tab" data-strategy-button="true_swing" onclick="setStrategyMode('true_swing')">True Swing</button>
+    <button class="source-tab" data-strategy-button="quality_swing" onclick="setStrategyMode('quality_swing')">Quality Swing</button>
+  </div>
+  <div class="header-sub" id="home-strategy-note" style="padding:0 16px 12px">True Swing is the default. Quality Swing adds stricter fundamental exclusions on top.</div>
+
   <div class="global-bar" id="global-bar">
     <div class="gi"><div class="gi-label">Gift Nifty</div><div class="gi-val up">&#9650; +0.42%</div></div>
     <div class="gi-divider"></div>
@@ -629,10 +635,10 @@ body{font-family:'DM Sans',sans-serif;color:var(--text);display:flex;justify-con
       <div class="srow" style="display:block">
         <div class="srow-lbl" style="margin-bottom:10px">Strategy Mode</div>
         <div class="source-tabs" style="margin:0">
-          <button class="source-tab" id="strategy-true-btn" onclick="setStrategyMode('true_swing')">True Swing</button>
-          <button class="source-tab" id="strategy-quality-btn" onclick="setStrategyMode('quality_swing')">Quality Swing</button>
+          <button class="source-tab" data-strategy-button="true_swing" onclick="setStrategyMode('true_swing')">True Swing</button>
+          <button class="source-tab" data-strategy-button="quality_swing" onclick="setStrategyMode('quality_swing')">Quality Swing</button>
         </div>
-        <div class="srow-val" id="strategy-mode-note" style="margin-top:10px">True Swing is the default. Quality Swing adds stricter fundamental exclusions on top.</div>
+        <div class="srow-val" data-strategy-note style="margin-top:10px">True Swing is the default. Quality Swing adds stricter fundamental exclusions on top.</div>
       </div>
       <div class="srow"><div class="srow-lbl">Risk Profile</div><div class="srow-val">Moderate</div></div>
       <div class="srow"><div class="srow-lbl">Trade Type</div><div class="srow-val">Delivery only</div></div>
@@ -1231,12 +1237,12 @@ function applySettingsToUi(settings) {
     toggle.classList.toggle('on', !!settings[key]);
   });
   var strategy = settings.strategy_profile === 'quality_swing' ? 'quality_swing' : 'true_swing';
-  var trueBtn = document.getElementById('strategy-true-btn');
-  var qualityBtn = document.getElementById('strategy-quality-btn');
-  if (trueBtn) trueBtn.classList.toggle('active', strategy === 'true_swing');
-  if (qualityBtn) qualityBtn.classList.toggle('active', strategy === 'quality_swing');
-  var note = document.getElementById('strategy-mode-note');
-  if (note) note.textContent = STRATEGY_META[strategy].note;
+  document.querySelectorAll('[data-strategy-button]').forEach(function(btn) {
+    btn.classList.toggle('active', btn.getAttribute('data-strategy-button') === strategy);
+  });
+  document.querySelectorAll('[data-strategy-note], #home-strategy-note').forEach(function(note) {
+    note.textContent = STRATEGY_META[strategy].note;
+  });
 }
 
 function toggleSetting(toggleEl) {
