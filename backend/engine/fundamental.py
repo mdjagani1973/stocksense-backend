@@ -6,6 +6,7 @@ import logging
 from config.settings import (
     PROMOTER_HOLDING_MIN_PCT, DEBT_TO_EQUITY_MAX,
     INSTITUTIONAL_HOLDING_MIN_PCT, REVENUE_GROWTH_MIN_PCT,
+    TRUE_SWING_MAX_DEBT_TO_EQUITY_HARD, TRUE_SWING_MIN_INSTITUTIONAL_HARD_PCT,
 )
 from data.fetcher import FUNDAMENTALS_DB
 
@@ -23,9 +24,9 @@ NBFC_EXEMPT = {"BAJFINANCE","BAJAJFINSV","CHOLAFIN","SUNDARMFIN",
 PSU_EXEMPT = {"ITC","ONGC","COALINDIA","NTPC","POWERGRID","BPCL","SBIN","BHEL"}
 
 
-def run_fundamental_analysis(ticker: str) -> dict:
+def run_fundamental_analysis(ticker: str, strategy: str = "true_swing") -> dict:
     symbol = ticker.replace(".NS","").replace(".BO","").strip().upper()
-    logger.info(f"  Fundamental check: {ticker}")
+    logger.info(f"  Fundamental check: {ticker} [strategy=%s]", strategy)
 
     fund = FUNDAMENTALS_DB.get(symbol)
     if not fund:
@@ -41,38 +42,49 @@ def run_fundamental_analysis(ticker: str) -> dict:
         }
 
     promoter_pct, de_ratio, inst_pct, rev_growth = fund
-    failures = []
+    hard_failures = []
+    caution_reasons = []
 
     # Promoter check (banks/PSUs exempt)
     is_bank = symbol in BANK_EXEMPT
     is_psu  = symbol in PSU_EXEMPT
-    if not is_bank and not is_psu:
-        if promoter_pct < PROMOTER_HOLDING_MIN_PCT:
-            failures.append(f"Promoter {promoter_pct:.1f}% < {PROMOTER_HOLDING_MIN_PCT}%")
-
-    # D/E check (NBFCs/banks exempt)
     is_nbfc = symbol in NBFC_EXEMPT
-    if not is_bank and not is_nbfc:
-        if de_ratio >= DEBT_TO_EQUITY_MAX:
-            # For PSUs like NTPC, POWERGRID — relax to 3.0
-            if is_psu and de_ratio < 3.0:
-                pass  # allow PSU infra cos
-            else:
-                failures.append(f"D/E {de_ratio:.2f} >= {DEBT_TO_EQUITY_MAX}")
+    apply_promoter_filter = not is_bank and not is_psu
+    apply_de_filter = not is_bank and not is_nbfc
 
-    # Institutional check
-    if inst_pct < INSTITUTIONAL_HOLDING_MIN_PCT:
-        failures.append(f"Institutional {inst_pct:.1f}% < {INSTITUTIONAL_HOLDING_MIN_PCT}%")
+    promoter_flag = apply_promoter_filter and promoter_pct < PROMOTER_HOLDING_MIN_PCT
+    de_flag = apply_de_filter and de_ratio >= DEBT_TO_EQUITY_MAX and not (is_psu and de_ratio < 3.0)
+    inst_flag = inst_pct < INSTITUTIONAL_HOLDING_MIN_PCT
+    revenue_flag = rev_growth < REVENUE_GROWTH_MIN_PCT
 
-    # Revenue growth check
-    if rev_growth < REVENUE_GROWTH_MIN_PCT:
-        failures.append(f"Revenue {rev_growth:.1f}% < {REVENUE_GROWTH_MIN_PCT}%")
+    if strategy == "quality_swing":
+        if promoter_flag:
+            hard_failures.append(f"Promoter {promoter_pct:.1f}% < {PROMOTER_HOLDING_MIN_PCT}%")
+        if de_flag:
+            hard_failures.append(f"D/E {de_ratio:.2f} >= {DEBT_TO_EQUITY_MAX}")
+        if inst_flag:
+            hard_failures.append(f"Institutional {inst_pct:.1f}% < {INSTITUTIONAL_HOLDING_MIN_PCT}%")
+        if revenue_flag:
+            hard_failures.append(f"Revenue {rev_growth:.1f}% < {REVENUE_GROWTH_MIN_PCT}%")
+    else:
+        if apply_de_filter and de_ratio >= TRUE_SWING_MAX_DEBT_TO_EQUITY_HARD:
+            hard_failures.append(f"D/E {de_ratio:.2f} >= hard max {TRUE_SWING_MAX_DEBT_TO_EQUITY_HARD}")
+        if inst_pct < TRUE_SWING_MIN_INSTITUTIONAL_HARD_PCT:
+            hard_failures.append(f"Institutional {inst_pct:.1f}% < hard min {TRUE_SWING_MIN_INSTITUTIONAL_HARD_PCT}%")
+        if promoter_flag:
+            caution_reasons.append(f"Promoter {promoter_pct:.1f}% < {PROMOTER_HOLDING_MIN_PCT}%")
+        if de_flag:
+            caution_reasons.append(f"D/E {de_ratio:.2f} >= {DEBT_TO_EQUITY_MAX}")
+        if inst_flag:
+            caution_reasons.append(f"Institutional {inst_pct:.1f}% < {INSTITUTIONAL_HOLDING_MIN_PCT}%")
+        if revenue_flag:
+            caution_reasons.append(f"Revenue {rev_growth:.1f}% < {REVENUE_GROWTH_MIN_PCT}%")
 
-    passed = len(failures) == 0
+    passed = len(hard_failures) == 0
     if passed:
         logger.info(f"  ✓ {ticker} passed fundamentals")
     else:
-        logger.info(f"  ✗ {ticker} failed: {' | '.join(failures)}")
+        logger.info(f"  ✗ {ticker} failed: {' | '.join(hard_failures)}")
 
     # Score
     score, signals = 0.5, []
@@ -84,6 +96,20 @@ def run_fundamental_analysis(ticker: str) -> dict:
     elif inst_pct >= 15: score += 0.05; signals.append(f"Good inst {inst_pct:.0f}%")
     if rev_growth >= 20: score += 0.10; signals.append(f"Rev +{rev_growth:.0f}%")
     elif rev_growth >= 10: score += 0.05; signals.append(f"Rev +{rev_growth:.0f}%")
+    if strategy == "true_swing":
+        if promoter_flag:
+            score -= 0.05
+            signals.append("Promoter comfort below quality profile")
+        if de_flag:
+            score -= 0.07
+            signals.append("Leverage above quality profile")
+        if inst_flag:
+            score -= 0.04
+            signals.append("Institutional sponsorship light")
+        if revenue_flag:
+            score -= 0.05
+            signals.append("Growth softer than quality profile")
+    score = max(0.2, score)
     score = min(score, 1.0)
 
     parts = []
@@ -91,10 +117,13 @@ def run_fundamental_analysis(ticker: str) -> dict:
     if de_ratio <= 0.5:    parts.append(f"D/E {de_ratio:.2f}")
     if inst_pct >= 15:     parts.append(f"Inst {inst_pct:.0f}%")
     if rev_growth >= 8:    parts.append(f"Rev +{rev_growth:.0f}%")
+    if strategy == "true_swing" and caution_reasons:
+        parts.append("Soft fundamental caution")
 
     return {
         "passed": passed, "score": score, "signals": signals,
-        "summary": " · ".join(parts[:4]), "failure_reasons": failures,
+        "summary": " · ".join(parts[:4]), "failure_reasons": hard_failures,
+        "caution_reasons": caution_reasons,
         "shareholding": {"promoter_pct": promoter_pct, "institutional_total": inst_pct,
                          "fii_pct": inst_pct*0.4, "dii_pct": inst_pct*0.3, "mf_pct": inst_pct*0.3},
         "financials": {"debt_to_equity": de_ratio, "revenue_growth_pct": rev_growth,

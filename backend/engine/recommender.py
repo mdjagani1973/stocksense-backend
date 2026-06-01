@@ -1,6 +1,6 @@
 """
 StockSense India — Recommendation Engine v2
-Fundamental hard filter gate runs FIRST before any technical analysis.
+True swing is the default profile. Quality swing is an optional stricter overlay.
 """
 
 import logging
@@ -20,6 +20,7 @@ from config.settings import (
     REGIME_RISK_ON_BREADTH20, REGIME_CAUTION_BREADTH20,
     REGIME_RISK_ON_RETURN20, REGIME_RISK_OFF_RETURN20,
     EMA_SHORT, EMA_LONG,
+    DEFAULT_STRATEGY_PROFILE, SUPPORTED_STRATEGY_PROFILES,
 )
 from data.fetcher import (
     fetch_ohlcv, fetch_current_price, fetch_news_sentiment,
@@ -47,6 +48,7 @@ class StockRecommendation:
     fundamental_summary: str = ""; fundamental_signals: list = field(default_factory=list)
     regime_label: str = ""; regime_score: float = 0.0
     relative_strength_pct: float = 0.0; atr_pct: float = 0.0
+    strategy: str = DEFAULT_STRATEGY_PROFILE
     created_at: str = ""; date: str = ""
 
     def to_dict(self):
@@ -169,10 +171,19 @@ def assess_market_regime(universe: list[str]) -> dict:
     }
 
 
-def analyse_stock(ticker: str, fii_data: dict, global_ctx: dict, market_regime: dict) -> Optional[StockRecommendation]:
+def analyse_stock(
+    ticker: str,
+    fii_data: dict,
+    global_ctx: dict,
+    market_regime: dict,
+    strategy: str = DEFAULT_STRATEGY_PROFILE,
+) -> Optional[StockRecommendation]:
     try:
-        # 1. FUNDAMENTAL GATE — runs first, reject ~65% of universe here
-        fund = run_fundamental_analysis(ticker)
+        if strategy not in SUPPORTED_STRATEGY_PROFILES:
+            return _reject(ticker, "unsupported strategy", strategy=strategy)
+
+        # 1. Fundamental overlay
+        fund = run_fundamental_analysis(ticker, strategy=strategy)
         if not fund["passed"]:
             return _reject(ticker, "fundamentals failed", failures=" | ".join(fund.get("failure_reasons", [])))
 
@@ -310,6 +321,19 @@ def analyse_stock(ticker: str, fii_data: dict, global_ctx: dict, market_regime: 
         global_note = " · ".join([n for n in notes if n][:3]) or "Global markets stable"
         reason_bits = [reason, f"RS {relative_strength_pct:+.1f}%", market_regime.get("label", "").replace("_", " ")]
         enriched_reason = " · ".join([bit for bit in reason_bits if bit])
+        if strategy == "quality_swing":
+            enriched_reason += " · quality overlay"
+
+        combined_signals = tech.get("signals", []) + pattern.get("patterns", []) + fund.get("signals", [])
+        if strategy == "true_swing":
+            combined_signals.append("Strategy profile: True Swing")
+            combined_signals.extend([f"Caution: {reason}" for reason in fund.get("caution_reasons", [])[:2]])
+        else:
+            combined_signals.append("Strategy profile: Quality Swing")
+        combined_signals.extend([
+            f"Market regime: {market_regime.get('label', 'neutral').replace('_', ' ')}",
+            f"Relative strength {relative_strength_pct:+.1f}%",
+        ])
 
         recommendation = StockRecommendation(
             ticker=clean, name=info.get("name", clean), exchange=exchange,
@@ -319,7 +343,7 @@ def analyse_stock(ticker: str, fii_data: dict, global_ctx: dict, market_regime: 
             confidence_pct=int(composite * 100),
             hold_sessions=f"{HOLD_SESSIONS_MIN}–{HOLD_SESSIONS_MAX} sessions",
             reason=enriched_reason,
-            signals=tech.get("signals", []) + pattern.get("patterns", []) + fund.get("signals", []) + [f"Market regime: {market_regime.get('label', 'neutral').replace('_', ' ')}", f"Relative strength {relative_strength_pct:+.1f}%"],
+            signals=combined_signals,
             global_context=global_note, sector=info.get("sector", "Unknown"),
             market_cap_cr=round((info.get("market_cap", 0) or 0) / 1e7, 0),
             rsi=round(tech.get("rsi", 50), 1), vol_ratio=round(tech.get("vol_ratio", 1), 2),
@@ -336,12 +360,14 @@ def analyse_stock(ticker: str, fii_data: dict, global_ctx: dict, market_regime: 
             regime_score=market_regime.get("score", 0),
             relative_strength_pct=round(relative_strength_pct, 2),
             atr_pct=round(atr_pct, 2),
+            strategy=strategy,
             created_at=datetime.now(IST).isoformat(),
             date=datetime.now(IST).strftime("%Y-%m-%d"),
         )
         logger.info(
-            "Accept %s: direction=%s confidence=%s composite=%.3f tech=%.3f pattern=%.3f rr=%.1f sector=%s",
+            "Accept %s: strategy=%s direction=%s confidence=%s composite=%.3f tech=%.3f pattern=%.3f rr=%.1f sector=%s",
             ticker,
+            strategy,
             direction,
             recommendation.confidence_pct,
             composite,
@@ -356,17 +382,19 @@ def analyse_stock(ticker: str, fii_data: dict, global_ctx: dict, market_regime: 
         return None
 
 
-def run_engine(mode: str = "eod") -> list:
-    logger.info(f"Engine starting — mode={mode}")
+def run_engine(mode: str = "eod", strategy: str = DEFAULT_STRATEGY_PROFILE) -> list:
+    if strategy not in SUPPORTED_STRATEGY_PROFILES:
+        raise ValueError(f"Unsupported strategy profile: {strategy}")
+    logger.info(f"Engine starting — mode={mode}, strategy={strategy}")
     global_ctx = fetch_global_context()
     fii_data   = fetch_fii_dii()
     universe   = screen_universe()
     market_regime = assess_market_regime(universe)
-    logger.info(f"Universe: {len(universe)} stocks. Running fundamental gate first...")
+    logger.info(f"Universe: {len(universe)} stocks. Running strategy profile {strategy}...")
     logger.info("Market regime assessment: %s", market_regime.get("summary"))
     candidates = []
     for ticker in universe:
-        recommendation = analyse_stock(ticker, fii_data, global_ctx, market_regime)
+        recommendation = analyse_stock(ticker, fii_data, global_ctx, market_regime, strategy=strategy)
         if recommendation:
             candidates.append(recommendation)
     logger.info(f"Candidates after scoring: {len(candidates)}")
@@ -384,16 +412,16 @@ def run_engine(mode: str = "eod") -> list:
         if sector_key:
             sector_count[sector_key] = sector_count.get(sector_key, 0) + 1
         if len(final_picks) >= MAX_PICKS: break
-    logger.info(f"Final picks: {len(final_picks)} (candidates={len(candidates)}, sector_capped={sector_capped})")
-    save_picks(final_picks)
+    logger.info(f"Final picks: {len(final_picks)} (strategy={strategy}, candidates={len(candidates)}, sector_capped={sector_capped})")
+    save_picks(final_picks, strategy=strategy)
     if len(final_picks) < MIN_PICKS:
         try:
             from utils.alerts import send_alert
             send_alert(
                 alert_type="quiet_market",
                 ticker="MARKET",
-                title="Quality filters kept today quiet",
-                message=f"Only {len(final_picks)} pick(s) passed strict swing filters. {market_regime.get('summary', 'Market regime cautious.')}",
+                title="Swing engine kept today selective",
+                message=f"Only {len(final_picks)} {strategy.replace('_', ' ')} pick(s) passed the current swing profile. {market_regime.get('summary', 'Market regime cautious.')}",
                 priority="low",
             )
         except Exception as exc:
@@ -416,6 +444,7 @@ def init_db():
             revenue_growth_pct REAL, roe_pct REAL, pe_ratio REAL,
             fundamental_summary TEXT, fundamental_signals TEXT,
             regime_label TEXT, regime_score REAL, relative_strength_pct REAL, atr_pct REAL,
+            strategy TEXT DEFAULT 'true_swing',
             created_at TEXT, date TEXT,
             status TEXT DEFAULT 'pending', actual_result_pct REAL,
             entry_triggered_at TEXT, exit_triggered_at TEXT, lifecycle_note TEXT)""")
@@ -432,6 +461,7 @@ def init_db():
             "regime_score": "ALTER TABLE picks ADD COLUMN regime_score REAL DEFAULT 0",
             "relative_strength_pct": "ALTER TABLE picks ADD COLUMN relative_strength_pct REAL DEFAULT 0",
             "atr_pct": "ALTER TABLE picks ADD COLUMN atr_pct REAL DEFAULT 0",
+            "strategy": "ALTER TABLE picks ADD COLUMN strategy TEXT DEFAULT 'true_swing'",
             "entry_triggered_at": "ALTER TABLE picks ADD COLUMN entry_triggered_at TEXT",
             "exit_triggered_at": "ALTER TABLE picks ADD COLUMN exit_triggered_at TEXT",
             "lifecycle_note": "ALTER TABLE picks ADD COLUMN lifecycle_note TEXT",
@@ -441,13 +471,14 @@ def init_db():
                 conn.execute(statement)
         conn.commit()
 
-def save_picks(picks):
+def save_picks(picks, strategy: str = DEFAULT_STRATEGY_PROFILE):
     run_date = picks[0].date if picks else datetime.now(IST).strftime("%Y-%m-%d")
     with sqlite3.connect(DB_PATH) as conn:
-        deleted = conn.execute("DELETE FROM picks WHERE date=?", (run_date,)).rowcount
-        logger.info(f"Cleared {deleted} existing picks for {run_date} before saving latest engine output")
+        deleted = conn.execute("DELETE FROM picks WHERE date=? AND strategy=?", (run_date, strategy)).rowcount
+        logger.info(f"Cleared {deleted} existing picks for {run_date} [{strategy}] before saving latest engine output")
         for p in picks:
             d = p.to_dict()
+            d["strategy"] = strategy
             d["status"] = "pending"
             d["actual_result_pct"] = None
             d["entry_triggered_at"] = None
@@ -457,17 +488,23 @@ def save_picks(picks):
                          list(d.values()))
         conn.commit()
 
-def get_todays_picks(date=None):
+def get_todays_picks(date=None, strategy: str = DEFAULT_STRATEGY_PROFILE):
     if not date: date = datetime.now(IST).strftime("%Y-%m-%d")
     with sqlite3.connect(DB_PATH) as conn:
         conn.row_factory = sqlite3.Row
-        rows = conn.execute("SELECT * FROM picks WHERE date=? ORDER BY confidence_pct DESC", (date,)).fetchall()
+        rows = conn.execute(
+            "SELECT * FROM picks WHERE date=? AND strategy=? ORDER BY confidence_pct DESC",
+            (date, strategy),
+        ).fetchall()
     return [dict(r) for r in rows]
 
-def get_pick_history(limit=30):
+def get_pick_history(limit=30, strategy: str = DEFAULT_STRATEGY_PROFILE):
     with sqlite3.connect(DB_PATH) as conn:
         conn.row_factory = sqlite3.Row
-        rows = conn.execute("SELECT * FROM picks ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
+        rows = conn.execute(
+            "SELECT * FROM picks WHERE strategy=? ORDER BY created_at DESC LIMIT ?",
+            (strategy, limit),
+        ).fetchall()
     return [dict(r) for r in rows]
 
 def update_pick_status(pick_id, status, result_pct=None):

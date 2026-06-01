@@ -7,7 +7,7 @@ Triggers alerts when targets or stop-losses are hit.
 import logging
 import sqlite3
 import yfinance as yf
-from config.settings import DB_PATH
+from config.settings import DB_PATH, DEFAULT_STRATEGY_PROFILE
 from engine.recommender import get_todays_picks, update_pick_status
 from utils.alerts import send_alert
 
@@ -175,7 +175,7 @@ def check_intraday_prices():
     Called every 5 minutes during market hours.
     Fetches current prices for all open picks and checks thresholds.
     """
-    picks = get_todays_picks()
+    picks = get_todays_picks(strategy=DEFAULT_STRATEGY_PROFILE)
     open_picks = [p for p in picks if p.get("status") in {"pending", "open"}]
 
     if not open_picks:
@@ -209,7 +209,7 @@ def run_eod_summary():
     Run at 3:45 PM. Summarise how today's picks performed.
     Expire any picks still open after 3 sessions.
     """
-    picks = get_todays_picks()
+    picks = get_todays_picks(strategy=DEFAULT_STRATEGY_PROFILE)
     total     = len(picks)
     hits      = [p for p in picks if p.get("status") == "target_hit"]
     stops     = [p for p in picks if p.get("status") == "stoploss_hit"]

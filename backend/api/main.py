@@ -18,7 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
 
-from config.settings import IST, DB_PATH
+from config.settings import IST, DB_PATH, DEFAULT_STRATEGY_PROFILE, SUPPORTED_STRATEGY_PROFILES
 from api.screenshot_routes import router as screenshot_router
 
 logging.basicConfig(
@@ -65,6 +65,13 @@ class PickStatusUpdate(BaseModel):
     result_pct: Optional[float] = None
 
 
+def normalize_strategy(strategy: Optional[str]) -> str:
+    selected = (strategy or DEFAULT_STRATEGY_PROFILE).strip().lower()
+    if selected not in SUPPORTED_STRATEGY_PROFILES:
+        raise HTTPException(400, f"Strategy must be one of {SUPPORTED_STRATEGY_PROFILES}")
+    return selected
+
+
 # ── Health ────────────────────────────────────────────────────────────────────
 
 @app.get("/health")
@@ -109,13 +116,18 @@ def global_context():
 # ── Picks ─────────────────────────────────────────────────────────────────────
 
 @app.get("/picks/today")
-def get_today_picks(date: str = Query(default=None)):
+def get_today_picks(
+    date: str = Query(default=None),
+    strategy: str = Query(default=DEFAULT_STRATEGY_PROFILE),
+):
     from engine.recommender import get_todays_picks
-    picks = get_todays_picks(date)
+    selected_strategy = normalize_strategy(strategy)
+    picks = get_todays_picks(date, strategy=selected_strategy)
     buy   = [p for p in picks if p["direction"] == "buy"]
     sell  = [p for p in picks if p["direction"] == "sell"]
     return {
         "date": date or datetime.now(IST).strftime("%Y-%m-%d"),
+        "strategy": selected_strategy,
         "buy_picks": buy,
         "sell_picks": sell,
         "total": len(picks),
@@ -124,9 +136,13 @@ def get_today_picks(date: str = Query(default=None)):
 
 
 @app.get("/picks/history")
-def pick_history(limit: int = Query(default=30, le=100)):
+def pick_history(
+    limit: int = Query(default=30, le=100),
+    strategy: str = Query(default=DEFAULT_STRATEGY_PROFILE),
+):
     from engine.recommender import get_pick_history
-    picks  = get_pick_history(limit)
+    selected_strategy = normalize_strategy(strategy)
+    picks  = get_pick_history(limit, strategy=selected_strategy)
     total  = len(picks)
     hits   = [p for p in picks if p.get("status") == "target_hit"]
     stops  = [p for p in picks if p.get("status") == "stoploss_hit"]
@@ -137,6 +153,7 @@ def pick_history(limit: int = Query(default=30, le=100)):
     win_rate = round(len(hits) / len(closed) * 100, 1) if closed else 0
     return {
         "picks": picks,
+        "strategy": selected_strategy,
         "stats": {
             "total": total,
             "target_hits": len(hits),
@@ -264,12 +281,17 @@ def recent_alerts(limit: int = Query(default=20, le=50)):
 # ── Manual engine trigger ─────────────────────────────────────────────────────
 
 @app.post("/engine/run")
-def trigger_engine(mode: str = Query(default="eod")):
+def trigger_engine(
+    mode: str = Query(default="eod"),
+    strategy: str = Query(default=DEFAULT_STRATEGY_PROFILE),
+):
     try:
         from engine.recommender import run_engine
-        picks = run_engine(mode=mode)
+        selected_strategy = normalize_strategy(strategy)
+        picks = run_engine(mode=mode, strategy=selected_strategy)
         return {
             "ok": True,
+            "strategy": selected_strategy,
             "picks_count": len(picks),
             "picks": [p.to_dict() for p in picks],
         }

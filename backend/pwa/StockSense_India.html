@@ -626,21 +626,31 @@ body{font-family:'DM Sans',sans-serif;color:var(--text);display:flex;justify-con
   <div class="settings-sec">
     <div class="settings-sec-title">Strategy</div>
     <div class="settings-card">
+      <div class="srow" style="display:block">
+        <div class="srow-lbl" style="margin-bottom:10px">Strategy Mode</div>
+        <div class="source-tabs" style="margin:0">
+          <button class="source-tab" id="strategy-true-btn" onclick="setStrategyMode('true_swing')">True Swing</button>
+          <button class="source-tab" id="strategy-quality-btn" onclick="setStrategyMode('quality_swing')">Quality Swing</button>
+        </div>
+        <div class="srow-val" id="strategy-mode-note" style="margin-top:10px">True Swing is the default. Quality Swing adds stricter fundamental exclusions on top.</div>
+      </div>
       <div class="srow"><div class="srow-lbl">Risk Profile</div><div class="srow-val">Moderate</div></div>
       <div class="srow"><div class="srow-lbl">Trade Type</div><div class="srow-val">Delivery only</div></div>
       <div class="srow"><div class="srow-lbl">Stop-loss %</div><div class="srow-val">1.5%</div></div>
       <div class="srow"><div class="srow-lbl">Min R:R Ratio</div><div class="srow-val">1 : 2</div></div>
       <div class="srow"><div class="srow-lbl">Max picks / day</div><div class="srow-val">5</div></div>
-      <div class="srow"><div class="srow-lbl">Hold duration</div><div class="srow-val">2&ndash;3 sessions</div></div>
+      <div class="srow"><div class="srow-lbl">Hold duration</div><div class="srow-val">3&ndash;5 sessions</div></div>
     </div>
   </div>
   <div class="settings-sec">
-    <div class="settings-sec-title">Mandatory Fundamental Filters</div>
+    <div class="settings-sec-title">Fundamental Overlay</div>
     <div class="settings-card">
-      <div class="srow"><div class="srow-lbl">Promoter holding</div><div class="srow-val">&gt; 40%</div></div>
-      <div class="srow"><div class="srow-lbl">Debt-to-equity</div><div class="srow-val">&lt; 0.5</div></div>
-      <div class="srow"><div class="srow-lbl">FII + DII + MF</div><div class="srow-val">&gt; 15% combined</div></div>
-      <div class="srow"><div class="srow-lbl">Revenue growth YoY</div><div class="srow-val">&gt; 10%</div></div>
+      <div class="srow"><div class="srow-lbl">True Swing default</div><div class="srow-val">Soft penalties only</div></div>
+      <div class="srow"><div class="srow-lbl">Hard red flags</div><div class="srow-val">Extreme leverage or weak sponsorship</div></div>
+      <div class="srow"><div class="srow-lbl">Quality Swing promoter rule</div><div class="srow-val">&ge; 35%</div></div>
+      <div class="srow"><div class="srow-lbl">Quality Swing debt-to-equity</div><div class="srow-val">&lt; 0.8</div></div>
+      <div class="srow"><div class="srow-lbl">Quality Swing institutional</div><div class="srow-val">&ge; 12%</div></div>
+      <div class="srow"><div class="srow-lbl">Quality Swing revenue growth</div><div class="srow-val">&ge; 10%</div></div>
       <div class="srow"><div class="srow-lbl">52W range shown on cards</div><div class="toggle on" data-setting-key="ui_show_52w_range" onclick="toggleSetting(this)"></div></div>
     </div>
   </div>
@@ -658,10 +668,10 @@ body{font-family:'DM Sans',sans-serif;color:var(--text);display:flex;justify-con
   <div class="settings-sec">
     <div class="settings-sec-title">AI Signal Weights</div>
     <div class="settings-card">
-      <div class="srow"><div class="srow-lbl">Technical indicators</div><div class="srow-val">35%</div></div>
-      <div class="srow"><div class="srow-lbl">Historical patterns</div><div class="srow-val">30%</div></div>
-      <div class="srow"><div class="srow-lbl">News sentiment</div><div class="srow-val">20%</div></div>
-      <div class="srow"><div class="srow-lbl">Fundamentals filter</div><div class="srow-val">15%</div></div>
+      <div class="srow"><div class="srow-lbl">Technical indicators</div><div class="srow-val">48%</div></div>
+      <div class="srow"><div class="srow-lbl">Historical patterns</div><div class="srow-val">27%</div></div>
+      <div class="srow"><div class="srow-lbl">News sentiment</div><div class="srow-val">8%</div></div>
+      <div class="srow"><div class="srow-lbl">Fundamental overlay</div><div class="srow-val">17%</div></div>
     </div>
   </div>
   <div class="disclaimer">StockSense India is a personal decision-support tool only. Not SEBI-registered. Not financial advice. You are solely responsible for all trading decisions.</div>
@@ -849,6 +859,7 @@ function latestAvailablePickSet(todayData, historyData) {
   if (todayBuy.length || todaySell.length) {
     return {
       date: todayData.date || '',
+      strategy: todayData && todayData.strategy ? todayData.strategy : currentStrategyProfile(),
       buy_picks: todayBuy,
       sell_picks: todaySell,
       total: (todayData && typeof todayData.total === 'number') ? todayData.total : (todayBuy.length + todaySell.length),
@@ -860,6 +871,7 @@ function latestAvailablePickSet(todayData, historyData) {
   if (!historyPicks.length) {
     return {
       date: todayData && todayData.date ? todayData.date : '',
+      strategy: todayData && todayData.strategy ? todayData.strategy : currentStrategyProfile(),
       buy_picks: [],
       sell_picks: [],
       total: 0,
@@ -874,6 +886,7 @@ function latestAvailablePickSet(todayData, historyData) {
   var latestPicks = historyPicks.filter(function(pick) { return pick && pick.date === latestDate; });
   return {
     date: latestDate,
+    strategy: historyData && historyData.strategy ? historyData.strategy : currentStrategyProfile(),
     buy_picks: latestPicks.filter(function(pick) { return pick.direction === 'buy'; }),
     sell_picks: latestPicks.filter(function(pick) { return pick.direction === 'sell'; }),
     total: latestPicks.length,
@@ -911,9 +924,10 @@ function renderHomePicks(data) {
   const buyMarkup = buyPicks.length ? buyPicks.map(buildPickCard).join('') : '<div class="schedule-card"><div class="sched-text">No buy picks generated for this date.</div></div>';
   const sellMarkup = sellPicks.length ? sellPicks.map(buildPickCard).join('') : '<div class="schedule-card"><div class="sched-text">No sell picks generated for this date.</div></div>';
   const labelDate = formatDisplayDate(data.date || '');
+  const strategyLabel = formatStrategyLabel(data.strategy || currentStrategyProfile());
   const note = data.fallback
-    ? 'Showing latest available picks from ' + escapeHtml(labelDate) + '. Pick levels stay fixed from the engine. Live current prices refresh in the browser.'
-    : 'Showing picks for ' + escapeHtml(labelDate) + '. Pick levels stay fixed from the engine. Live current prices refresh in the browser.';
+    ? strategyLabel + ' · showing latest available picks from ' + escapeHtml(labelDate) + '. Pick levels stay fixed from the engine. Live current prices refresh in the browser.'
+    : strategyLabel + ' · showing picks for ' + escapeHtml(labelDate) + '. Pick levels stay fixed from the engine. Live current prices refresh in the browser.';
   const quietNote = buyPicks.length < 2
     ? '<div class="disclaimer" style="margin-top:8px">Strict swing filters found only ' + escapeHtml(String(buyPicks.length)) + ' buy setup' + (buyPicks.length === 1 ? '' : 's') + ' for this run. Quiet days are expected under quality-first mode.</div>'
     : '';
@@ -1104,11 +1118,38 @@ var DEFAULT_SETTINGS = {
   notif_stoploss: true,
   notif_target_hit: true,
   notif_eod_summary: false,
+  strategy_profile: 'true_swing',
   ui_show_52w_range: true,
   universe_large_cap: true,
   universe_mid_cap: true,
   universe_small_cap: false
 };
+
+var STRATEGY_META = {
+  true_swing: {
+    label: 'True Swing',
+    note: 'Default profile. Technicals, momentum, and regime lead. Fundamentals mostly adjust confidence instead of blocking setups.'
+  },
+  quality_swing: {
+    label: 'Quality Swing',
+    note: 'Optional stricter overlay. Reapplies promoter, leverage, institutional, and growth exclusions on top of swing setup rules.'
+  }
+};
+
+function currentStrategyProfile() {
+  var settings = readSettings();
+  return settings.strategy_profile === 'quality_swing' ? 'quality_swing' : 'true_swing';
+}
+
+function formatStrategyLabel(strategy) {
+  var meta = STRATEGY_META[strategy] || STRATEGY_META.true_swing;
+  return meta.label;
+}
+
+function withStrategyPath(path, strategy) {
+  var selected = strategy || currentStrategyProfile();
+  return path + (path.indexOf('?') >= 0 ? '&' : '?') + 'strategy=' + encodeURIComponent(selected);
+}
 
 function readSettings() {
   try {
@@ -1135,6 +1176,13 @@ function applySettingsToUi(settings) {
     var key = toggle.getAttribute('data-setting-key');
     toggle.classList.toggle('on', !!settings[key]);
   });
+  var strategy = settings.strategy_profile === 'quality_swing' ? 'quality_swing' : 'true_swing';
+  var trueBtn = document.getElementById('strategy-true-btn');
+  var qualityBtn = document.getElementById('strategy-quality-btn');
+  if (trueBtn) trueBtn.classList.toggle('active', strategy === 'true_swing');
+  if (qualityBtn) qualityBtn.classList.toggle('active', strategy === 'quality_swing');
+  var note = document.getElementById('strategy-mode-note');
+  if (note) note.textContent = STRATEGY_META[strategy].note;
 }
 
 function toggleSetting(toggleEl) {
@@ -1151,6 +1199,16 @@ function initializeSettings() {
   var settings = readSettings();
   writeSettings(settings);
   applySettingsToUi(settings);
+}
+
+function setStrategyMode(mode) {
+  var selected = mode === 'quality_swing' ? 'quality_swing' : 'true_swing';
+  var settings = readSettings();
+  if (settings.strategy_profile === selected) return;
+  settings.strategy_profile = selected;
+  writeSettings(settings);
+  applySettingsToUi(settings);
+  loadLiveData();
 }
 
 function cachePortfolioPayload(data) {
@@ -1391,9 +1449,9 @@ async function loadLiveData() {
     const results = await Promise.allSettled([
       fetchJSON('/market/status'),
       fetchJSON('/market/global'),
-      fetchJSON('/picks/today'),
+      fetchJSON(withStrategyPath('/picks/today')),
       fetchJSON('/alerts?limit=20'),
-      fetchJSON('/picks/history?limit=30'),
+      fetchJSON(withStrategyPath('/picks/history?limit=30')),
       fetchJSON('/portfolio')
     ]);
     if (results[0].status === 'fulfilled') renderMarketStatus(results[0].value);
@@ -1452,12 +1510,14 @@ function setEngineStatus(message, tone) {
 async function runEngineNow() {
   var btn = document.getElementById('run-engine-btn');
   if (!btn || btn.disabled) return;
+  var strategy = currentStrategyProfile();
+  var strategyLabel = formatStrategyLabel(strategy);
   btn.disabled = true;
   var originalLabel = btn.textContent;
   btn.textContent = 'Running...';
-  setEngineStatus('Engine started. Render free tier can take 30 to 60 seconds before fresh picks appear.', 'info');
+  setEngineStatus(strategyLabel + ' started. Render free tier can take 30 to 60 seconds before fresh picks appear.', 'info');
   try {
-    var response = await fetch(API_BASE + '/engine/run?mode=eod', {
+    var response = await fetch(API_BASE + withStrategyPath('/engine/run?mode=eod', strategy), {
       method: 'POST',
       headers: { 'Accept': 'application/json' }
     });
@@ -1468,6 +1528,7 @@ async function runEngineNow() {
     var picks = payload && Array.isArray(payload.picks) ? payload.picks : [];
     var grouped = {
       date: new Date().toISOString().slice(0, 10),
+      strategy: payload && payload.strategy ? payload.strategy : strategy,
       buy_picks: picks.filter(function(pick){ return pick.direction === 'buy'; }),
       sell_picks: picks.filter(function(pick){ return pick.direction === 'sell'; }),
       total: picks.length,
@@ -1478,7 +1539,7 @@ async function runEngineNow() {
       portfolioPayload = await fetchJSON('/portfolio');
     } catch (_) {}
     renderHomePicks(filterSellCandidatesForPortfolio(grouped, portfolioPayload));
-    setEngineStatus('Engine finished with ' + picks.length + ' picks. Refreshing alerts, track, and portfolio now.', picks.length ? 'success' : 'info');
+    setEngineStatus(strategyLabel + ' finished with ' + picks.length + ' picks. Refreshing alerts, track, and portfolio now.', picks.length ? 'success' : 'info');
     await loadLiveData();
     setEngineStatus('Engine run completed and live sections were refreshed.', picks.length ? 'success' : 'info');
   } catch (err) {

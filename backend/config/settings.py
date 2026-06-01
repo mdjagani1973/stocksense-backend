@@ -78,11 +78,19 @@ GNEWS_RSS     = "https://news.google.com/rss/search?q={symbol}+stock+India&hl=en
 
 DB_PATH = "stocksense.db"
 
-# Relaxed fundamental filters
+# Strategy profiles
+DEFAULT_STRATEGY_PROFILE       = "true_swing"
+SUPPORTED_STRATEGY_PROFILES    = ("true_swing", "quality_swing")
+
+# Quality swing filters
 PROMOTER_HOLDING_MIN_PCT      = 35.0
 DEBT_TO_EQUITY_MAX            = 0.8
 INSTITUTIONAL_HOLDING_MIN_PCT = 12.0
 REVENUE_GROWTH_MIN_PCT        = 10.0
+
+# True swing only hard fails extreme balance-sheet / sponsorship risk.
+TRUE_SWING_MAX_DEBT_TO_EQUITY_HARD    = 2.5
+TRUE_SWING_MIN_INSTITUTIONAL_HARD_PCT = 5.0
 
 STOCK_UNIVERSE = [
     "RELIANCE.NS","TCS.NS","HDFCBANK.NS","INFY.NS","ICICIBANK.NS",
