@@ -907,9 +907,13 @@ function filterSellCandidatesForPortfolio(data, portfolioData) {
   var filteredSell = sellPicks.filter(function(pick) {
     return !!owned[String(pick && pick.ticker || '').toUpperCase()];
   });
+  var regimePick = buyPicks[0] || sellPicks[0] || null;
   base.buy_picks = buyPicks;
   base.sell_picks = filteredSell;
+  base.source_buy_count = buyPicks.length;
+  base.source_sell_count = sellPicks.length;
   base.hidden_sell_count = Math.max(0, sellPicks.length - filteredSell.length);
+  base.regime_label = base.regime_label || (regimePick && regimePick.regime_label) || '';
   base.total = buyPicks.length + filteredSell.length;
   return base;
 }
@@ -925,12 +929,27 @@ function renderHomePicks(data) {
   const sellMarkup = sellPicks.length ? sellPicks.map(buildPickCard).join('') : '<div class="schedule-card"><div class="sched-text">No sell picks generated for this date.</div></div>';
   const labelDate = formatDisplayDate(data.date || '');
   const strategyLabel = formatStrategyLabel(data.strategy || currentStrategyProfile());
+  const rawSellCount = typeof data.source_sell_count === 'number' ? data.source_sell_count : (sellPicks.length + (data.hidden_sell_count || 0));
+  const regimeLabel = formatRegimeLabel(data.regime_label);
   const note = data.fallback
     ? strategyLabel + ' · showing latest available picks from ' + escapeHtml(labelDate) + '. Pick levels stay fixed from the engine. Live current prices refresh in the browser.'
     : strategyLabel + ' · showing picks for ' + escapeHtml(labelDate) + '. Pick levels stay fixed from the engine. Live current prices refresh in the browser.';
-  const quietNote = buyPicks.length < 2
-    ? '<div class="disclaimer" style="margin-top:8px">Strict swing filters found only ' + escapeHtml(String(buyPicks.length)) + ' buy setup' + (buyPicks.length === 1 ? '' : 's') + ' for this run. Quiet days are expected under quality-first mode.</div>'
-    : '';
+  var quietNote = '';
+  if (buyPicks.length === 0) {
+    var quietDesc = regimeLabel
+      ? 'No long setups passed while the market regime stayed ' + regimeLabel + '.'
+      : 'No long setups passed this run.';
+    if (rawSellCount > 0) {
+      quietDesc += ' The engine leaned bearish instead and found ' + rawSellCount + ' sell setup' + (rawSellCount === 1 ? '' : 's') + '.';
+    } else if (data.strategy === 'quality_swing') {
+      quietDesc += ' Quality Swing stayed selective rather than forcing an entry.';
+    } else {
+      quietDesc += ' True Swing stayed flat rather than forcing a weak entry.';
+    }
+    quietNote = '<div class="disclaimer" style="margin-top:8px">' + escapeHtml(quietDesc) + '</div>';
+  } else if (buyPicks.length === 1) {
+    quietNote = '<div class="disclaimer" style="margin-top:8px">Only one buy setup cleared the current ' + escapeHtml(strategyLabel.toLowerCase()) + ' bar, so the engine kept the list concentrated.</div>';
+  }
   const sellNote = data.hidden_sell_count
     ? '<div class="disclaimer" style="margin-top:8px">Hidden ' + escapeHtml(String(data.hidden_sell_count)) + ' market-wide sell candidate' + (data.hidden_sell_count === 1 ? '' : 's') + ' because Sell is portfolio-linked in this app.</div>'
     : '';
@@ -963,64 +982,96 @@ function alertIconClass(alertType) {
   return 'a';
 }
 
+function formatRegimeLabel(regime) {
+  if (!regime) return '';
+  return String(regime).replace(/_/g, ' ');
+}
+
 function buildScheduledAlertEntries() {
-  var entries = [];
   var now = getIstNowParts();
   var mins = now.hour * 60 + now.minute;
+  var slots = [
+    { minute: 360, label: '06:00 AM', title: 'Next global context pull', desc: 'Overnight global context refreshes before the market-open scan.' },
+    { minute: 540, label: '09:00 AM', title: 'Next final picks checkpoint', desc: 'The scheduled morning run refreshes the default swing feed before the open.' },
+    { minute: 660, label: '11:00 AM', title: 'Next intraday check', desc: 'Intraday monitoring looks for entry, target, missed-move, and stop-loss events.' },
+    { minute: 810, label: '01:30 PM', title: 'Next afternoon scan', desc: 'This checkpoint is best used for refreshed state, not for repeated static schedule cards.' },
+    { minute: 945, label: '03:45 PM', title: 'Next EOD recap', desc: 'Track summarises theoretical outcomes and carry-forward state for today\'s picks.' },
+    { minute: 1140, label: '07:00 PM', title: 'Next preliminary scan', desc: 'The evening scan prepares the next cycle using fresh EOD data.' }
+  ];
+  var nextIndex = slots.findIndex(function(slot) { return mins < slot.minute; });
+  if (nextIndex < 0) nextIndex = 0;
+  return [slots[nextIndex], slots[(nextIndex + 1) % slots.length]].map(function(slot, idx) {
+    return {
+      alert_type: idx === 0 ? 'global_update' : 'intraday_move',
+      title: slot.title,
+      desc: slot.desc,
+      atime: slot.label
+    };
+  });
+}
+
+function buildEngineInsightEntries() {
   var pickSet = CURRENT_HOME_PICK_SET || {};
   var perf = CURRENT_PERFORMANCE_DATA || {};
-  var buyCount = Array.isArray(pickSet.buy_picks) ? pickSet.buy_picks.length : 0;
-  var sellCount = Array.isArray(pickSet.sell_picks) ? pickSet.sell_picks.length : 0;
+  var strategyLabel = formatStrategyLabel(pickSet.strategy || currentStrategyProfile());
   var labelDate = formatDisplayDate(pickSet.date || '');
+  var buyCount = typeof pickSet.source_buy_count === 'number' ? pickSet.source_buy_count : (Array.isArray(pickSet.buy_picks) ? pickSet.buy_picks.length : 0);
+  var rawSellCount = typeof pickSet.source_sell_count === 'number' ? pickSet.source_sell_count : ((Array.isArray(pickSet.sell_picks) ? pickSet.sell_picks.length : 0) + (pickSet.hidden_sell_count || 0));
+  var visibleSellCount = Array.isArray(pickSet.sell_picks) ? pickSet.sell_picks.length : 0;
+  var hiddenSellCount = pickSet.hidden_sell_count || 0;
+  var regimeLabel = formatRegimeLabel(pickSet.regime_label);
+  var entries = [];
 
-  if (mins >= 540 && (buyCount || sellCount)) {
+  if (pickSet.date) {
     entries.push({
       alert_type: 'picks_ready',
-      title: '9:00 AM picks snapshot',
-      desc: (pickSet.fallback ? 'Using latest available picks from ' + labelDate : 'Today\'s picks loaded') + ' · ' + buyCount + ' buy + ' + sellCount + ' sell',
-      atime: '09:00 AM'
+      title: strategyLabel + ' run summary',
+      desc: labelDate + ' · ' + buyCount + ' buy / ' + rawSellCount + ' sell from the engine' + (regimeLabel ? ' · regime ' + regimeLabel : ''),
+      atime: pickSet.generated_at ? formatCompactDate(pickSet.generated_at) : 'Latest run'
     });
   }
-  if (mins >= 660) {
+  if (buyCount === 0) {
     entries.push({
-      alert_type: 'intraday_move',
-      title: '11:00 AM mid-session scan window',
-      desc: 'Review Home and Alerts for entry-trigger, missed-move, target-touch, and stop-loss events as they are logged.',
-      atime: '11:00 AM'
+      alert_type: 'quiet_market',
+      title: 'Why no buy picks showed up',
+      desc: rawSellCount > 0
+        ? 'The engine found bearish setups instead of long entries' + (regimeLabel ? ' because the regime stayed ' + regimeLabel : '') + '. It refused to force a weak buy.'
+        : 'No long setup cleared the current swing bar' + (regimeLabel ? ' while the regime stayed ' + regimeLabel : '') + '.',
+      atime: strategyLabel
     });
   }
-  if (mins >= 810) {
+  if (hiddenSellCount > 0) {
+    entries.push({
+      alert_type: 'missed_move',
+      title: 'Sell ideas were hidden on purpose',
+      desc: hiddenSellCount + ' market-wide sell candidate' + (hiddenSellCount === 1 ? '' : 's') + ' were removed because Sell is portfolio-linked. Only owned exits appear in Home.',
+      atime: visibleSellCount + ' visible · ' + hiddenSellCount + ' hidden'
+    });
+  }
+  if (!entries.length) {
     entries.push({
       alert_type: 'global_update',
-      title: '1:30 PM afternoon update window',
-      desc: 'Use Home and Track for the latest visible state. A distinct afternoon update card is not yet generated by backend jobs.',
-      atime: '01:30 PM'
+      title: 'Waiting for a meaningful engine update',
+      desc: 'Run the engine again after the next data checkpoint if you want a fresh context-aware summary here.',
+      atime: strategyLabel
     });
   }
-  if (mins >= 945) {
-    var stats = perf.stats || {};
+  if (perf && perf.stats && perf.stats.total) {
     entries.push({
       alert_type: 'eod_summary',
-      title: '3:45 PM EOD summary window',
-      desc: 'Track currently shows theoretical engine performance' + (stats.total ? ' · ' + (stats.win_rate_pct || 0) + '% win rate across ' + stats.total + ' picks' : ''),
-      atime: '03:45 PM'
+      title: 'Current track snapshot',
+      desc: (perf.stats.win_rate_pct || 0) + '% win rate across ' + perf.stats.total + ' stored ' + strategyLabel.toLowerCase() + ' picks.',
+      atime: 'Track'
     });
   }
-  if (mins >= 1140) {
-    entries.push({
-      alert_type: 'global_update',
-      title: '7:00 PM preliminary scan window',
-      desc: 'EOD preparation slot reached. Fresh recommendations still depend on engine run and backend data availability.',
-      atime: '07:00 PM'
-    });
-  }
-  return entries;
+  return entries.slice(0, 3);
 }
 
 function renderAlerts(data) {
   const root = document.getElementById('alerts-list');
   if (!root || !data) return;
   const alerts = Array.isArray(data.alerts) ? data.alerts : [];
+  const insightEntries = buildEngineInsightEntries();
   const scheduled = buildScheduledAlertEntries();
   const actualMarkup = alerts.map(function(alert) {
     const parts = String(alert.message || '').split(' | ');
@@ -1028,11 +1079,14 @@ function renderAlerts(data) {
     const desc = parts.join(' | ') || 'No details available';
     return `<div class="alert-item"><div class="aicon ${alertIconClass(alert.alert_type)}">&#128276;</div><div class="acontent"><div class="atitle">${escapeHtml(title)}</div><div class="adesc">${escapeHtml(desc)}</div><div class="atime">${formatCompactDate(alert.created_at)}</div></div></div>`;
   }).join('');
+  const insightMarkup = insightEntries.map(function(alert) {
+    return `<div class="alert-item"><div class="aicon ${alertIconClass(alert.alert_type)}">&#128161;</div><div class="acontent"><div class="atitle">${escapeHtml(alert.title)}</div><div class="adesc">${escapeHtml(alert.desc)}</div><div class="atime">${escapeHtml(alert.atime)}</div></div></div>`;
+  }).join('');
   const scheduledMarkup = scheduled.map(function(alert) {
     return `<div class="alert-item"><div class="aicon ${alertIconClass(alert.alert_type)}">&#128338;</div><div class="acontent"><div class="atitle">${escapeHtml(alert.title)}</div><div class="adesc">${escapeHtml(alert.desc)}</div><div class="atime">${escapeHtml(alert.atime)} · schedule</div></div></div>`;
   }).join('');
-  const emptyMarkup = alerts.length ? '' : '<div class="alert-item"><div class="aicon a">&#9888;</div><div class="acontent"><div class="atitle">No backend-generated alerts logged yet today</div><div class="adesc">Below this, you can still see schedule-based update windows and what they currently mean.</div><div class="atime">Today</div></div></div>';
-  root.innerHTML = emptyMarkup + scheduledMarkup + actualMarkup;
+  const emptyMarkup = alerts.length ? '' : '<div class="alert-item"><div class="aicon a">&#9888;</div><div class="acontent"><div class="atitle">No push-style backend alerts logged yet today</div><div class="adesc">Engine insight cards below are derived from the latest run and your current portfolio context.</div><div class="atime">Today</div></div></div>';
+  root.innerHTML = emptyMarkup + insightMarkup + actualMarkup + scheduledMarkup;
 }
 
 function renderPerformance(data) {
