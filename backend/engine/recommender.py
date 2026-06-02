@@ -21,6 +21,8 @@ from config.settings import (
     REGIME_RISK_ON_RETURN20, REGIME_RISK_OFF_RETURN20,
     EMA_SHORT, EMA_LONG,
     DEFAULT_STRATEGY_PROFILE, SUPPORTED_STRATEGY_PROFILES,
+    TRUE_SWING_RELATIVE_STRENGTH_MIN_PCT, TRUE_SWING_BUY_SCORE_FLOOR,
+    TRUE_SWING_PATTERN_SCORE_FLOOR, TRUE_SWING_RISK_OFF_BUY_SCORE_MIN,
 )
 from data.fetcher import (
     fetch_ohlcv, fetch_current_price, fetch_news_sentiment,
@@ -171,6 +173,34 @@ def assess_market_regime(universe: list[str]) -> dict:
     }
 
 
+def _coerce_true_swing_buy(tech: dict, pattern: dict, relative_strength_pct: float, market_regime: dict) -> tuple[dict, bool]:
+    buy_score = float(tech.get("buy_score", 0) or 0)
+    sell_score = float(tech.get("sell_score", 0) or 0)
+    pattern_score = float(pattern.get("score", 0) or 0)
+    pattern_direction = pattern.get("direction", "neutral")
+    regime_label = market_regime.get("label")
+
+    if tech.get("direction") != "neutral":
+        return tech, False
+    if pattern_direction != "buy":
+        return tech, False
+    if buy_score < TRUE_SWING_BUY_SCORE_FLOOR:
+        return tech, False
+    if pattern_score < TRUE_SWING_PATTERN_SCORE_FLOOR:
+        return tech, False
+    if buy_score <= sell_score:
+        return tech, False
+    if regime_label == "risk_off" and relative_strength_pct < TRUE_SWING_RELATIVE_STRENGTH_MIN_PCT:
+        return tech, False
+
+    upgraded = dict(tech)
+    upgraded["direction"] = "buy"
+    upgraded["score"] = round(max(buy_score, pattern_score * 0.8), 3)
+    upgraded["signals"] = list(tech.get("signals", [])) + ["Pattern-backed swing buy despite neutral technical trigger"]
+    upgraded["reason"] = " + ".join(upgraded["signals"][:3])
+    return upgraded, True
+
+
 def analyse_stock(
     ticker: str,
     fii_data: dict,
@@ -194,6 +224,12 @@ def analyse_stock(
         df = compute_indicators(df)
         tech = detect_signals(df)
         pattern = detect_patterns(df)
+        tech, coerced_buy = _coerce_true_swing_buy(
+            tech,
+            pattern,
+            relative_strength_pct=(_safe_return_pct(df, 20) or 0.0) - float(market_regime.get("benchmark_return20", 0.0) or 0.0),
+            market_regime=market_regime,
+        ) if strategy == "true_swing" else (tech, False)
         direction = tech.get("direction", "neutral")
         relative_strength_pct = (_safe_return_pct(df, 20) or 0.0) - float(market_regime.get("benchmark_return20", 0.0) or 0.0)
         if direction == "neutral":
@@ -216,14 +252,16 @@ def analyse_stock(
                 pattern_score=round(pattern.get("score", 0), 3),
                 direction=direction,
             )
-        if direction == "buy" and relative_strength_pct < RELATIVE_STRENGTH_MIN_PCT:
+        rs_min = TRUE_SWING_RELATIVE_STRENGTH_MIN_PCT if strategy == "true_swing" else RELATIVE_STRENGTH_MIN_PCT
+        if direction == "buy" and relative_strength_pct < rs_min:
             return _reject(
                 ticker,
                 "relative strength too weak for long swing",
                 rs=round(relative_strength_pct, 2),
                 regime=market_regime.get("label"),
             )
-        if direction == "buy" and market_regime.get("label") == "risk_off" and tech.get("score", 0) < 0.6:
+        risk_off_buy_floor = TRUE_SWING_RISK_OFF_BUY_SCORE_MIN if strategy == "true_swing" else 0.6
+        if direction == "buy" and market_regime.get("label") == "risk_off" and tech.get("score", 0) < risk_off_buy_floor:
             return _reject(
                 ticker,
                 "buy rejected in risk-off regime without exceptional strength",
@@ -323,6 +361,8 @@ def analyse_stock(
         enriched_reason = " · ".join([bit for bit in reason_bits if bit])
         if strategy == "quality_swing":
             enriched_reason += " · quality overlay"
+        elif coerced_buy:
+            enriched_reason += " · pattern-led true swing allowance"
 
         combined_signals = tech.get("signals", []) + pattern.get("patterns", []) + fund.get("signals", [])
         if strategy == "true_swing":
