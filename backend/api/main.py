@@ -87,6 +87,18 @@ def normalize_strategy(strategy: Optional[str]) -> str:
 
 # ── Health ────────────────────────────────────────────────────────────────────
 
+@app.api_route("/", methods=["GET", "HEAD"])
+def root():
+    now = datetime.now(IST)
+    return {
+        "service": "StockSense India API",
+        "status": "ok",
+        "time_ist": now.strftime("%Y-%m-%d %H:%M:%S IST"),
+        "health": "/health",
+        "docs": "/docs",
+    }
+
+
 @app.api_route("/health", methods=["GET", "HEAD"])
 def health():
     return {
