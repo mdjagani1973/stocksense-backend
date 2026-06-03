@@ -182,7 +182,9 @@ def _coerce_true_swing_buy(tech: dict, pattern: dict, relative_strength_pct: flo
 
     if tech.get("direction") != "neutral":
         return tech, False
-    if pattern_direction != "buy":
+    # In true swing mode, a strong non-bearish pattern can upgrade a neutral technical read.
+    # This catches setups that have constructive structure before the directional trigger fully flips.
+    if pattern_direction == "sell":
         return tech, False
     if buy_score < TRUE_SWING_BUY_SCORE_FLOOR:
         return tech, False
@@ -195,7 +197,7 @@ def _coerce_true_swing_buy(tech: dict, pattern: dict, relative_strength_pct: flo
 
     upgraded = dict(tech)
     upgraded["direction"] = "buy"
-    upgraded["score"] = round(max(buy_score, pattern_score * 0.8), 3)
+    upgraded["score"] = round(max(buy_score, pattern_score * 0.9, (buy_score + pattern_score) / 2), 3)
     upgraded["signals"] = list(tech.get("signals", [])) + ["Pattern-backed swing buy despite neutral technical trigger"]
     upgraded["reason"] = " + ".join(upgraded["signals"][:3])
     return upgraded, True
