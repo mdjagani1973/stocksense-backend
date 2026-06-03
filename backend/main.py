@@ -6,6 +6,7 @@ import sys
 import os
 import threading
 import logging
+from datetime import datetime
 
 # ── Ensure project root is in Python path ─────────────────────────────────────
 # This fixes import errors when running on Render
@@ -13,11 +14,26 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
+from config.settings import IST
+
+
+class ISTFormatter(logging.Formatter):
+    """Force app log timestamps to Asia/Kolkata for consistency with product data."""
+
+    def formatTime(self, record, datefmt=None):
+        dt = datetime.fromtimestamp(record.created, IST)
+        if datefmt:
+            return dt.strftime(datefmt)
+        return dt.isoformat()
+
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(name)s] %(levelname)s — %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
+for handler in logging.getLogger().handlers:
+    handler.setFormatter(ISTFormatter("%(asctime)s [%(name)s] %(levelname)s — %(message)s", "%Y-%m-%d %H:%M:%S"))
 logger = logging.getLogger("stocksense.main")
 
 
