@@ -98,6 +98,18 @@ _bhavcopy_cache = {}  # date_str -> DataFrame
 _cache_warmed   = False
 
 
+def _format_source_time(value) -> str:
+    """Best-effort normalization of upstream source timestamps into IST labels."""
+    try:
+        if value in (None, ""):
+            return ""
+        if isinstance(value, (int, float)):
+            return datetime.fromtimestamp(value, IST).strftime("%d-%b %H:%M IST")
+        return str(value).strip()
+    except Exception:
+        return ""
+
+
 def _safe_float(val, default=0.0):
     """Safely convert pandas scalar or Series to float."""
     try:
@@ -309,9 +321,13 @@ def fetch_global_context() -> dict:
     try:
         r = requests.get("https://open.er-api.com/v6/latest/USD", timeout=8, headers=HEADERS)
         if r.status_code == 200:
-            inr = r.json().get("rates", {}).get("INR")
+            payload = r.json()
+            inr = payload.get("rates", {}).get("INR")
             if inr:
-                result["usdinr"] = {"value": round(inr, 2), "change_pct": 0, "direction": "flat"}
+                result["usdinr"] = {
+                    "value": round(inr, 2),
+                    "as_of": _format_source_time(payload.get("time_last_update_unix") or payload.get("time_last_update_utc")),
+                }
     except Exception as e:
         logger.warning(f"USD/INR: {e}")
 
@@ -326,10 +342,11 @@ def fetch_global_context() -> dict:
                 sym = q.get("symbol", "")
                 chg = q.get("regularMarketChangePercent", 0)
                 val = q.get("regularMarketPrice", 0)
+                as_of = _format_source_time(q.get("regularMarketTime"))
                 if "GSPC" in sym:
-                    result["sp500"]  = {"value": val, "change_pct": round(chg,2), "direction": "up" if chg>=0 else "down"}
+                    result["sp500"] = {"value": val, "change_pct": round(chg,2), "direction": "up" if chg>=0 else "down", "as_of": as_of}
                 elif "IXIC" in sym:
-                    result["nasdaq"] = {"value": val, "change_pct": round(chg,2), "direction": "up" if chg>=0 else "down"}
+                    result["nasdaq"] = {"value": val, "change_pct": round(chg,2), "direction": "up" if chg>=0 else "down", "as_of": as_of}
     except Exception as e:
         logger.warning(f"US indices: {e}")
 
@@ -344,12 +361,12 @@ def fetch_fii_dii() -> dict:
         if resp.status_code == 200:
             data   = resp.json()
             latest = data[0] if data else {}
-            return {"fii_net_cr": latest.get("fiiNet", 0), "dii_net_cr": latest.get("diiNet", 0),
-                    "fii_buy_cr": latest.get("fiiBuy", 0), "fii_sell_cr": latest.get("fiiSell", 0),
+            return {"fii_net_cr": latest.get("fiiNet"), "dii_net_cr": latest.get("diiNet"),
+                    "fii_buy_cr": latest.get("fiiBuy"), "fii_sell_cr": latest.get("fiiSell"),
                     "date": latest.get("date", "")}
     except Exception as e:
         logger.error(f"fetch_fii_dii: {e}")
-    return {"fii_net_cr": 0, "dii_net_cr": 0, "date": ""}
+    return {"fii_net_cr": None, "dii_net_cr": None, "fii_buy_cr": None, "fii_sell_cr": None, "date": ""}
 
 
 def fetch_news_sentiment(symbol: str) -> dict:

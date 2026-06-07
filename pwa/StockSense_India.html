@@ -43,7 +43,7 @@ body{font-family:'DM Sans',sans-serif;color:var(--text);display:flex;justify-con
 .header-sub{font-size:12px;color:var(--text2);}
 .screen{display:none;padding-bottom:100px;}
 .screen.active{display:block;}
-.global-bar{margin:4px 16px 16px;background:var(--card);border:1px solid var(--border);border-radius:14px;padding:10px 14px;display:flex;gap:0;overflow-x:auto;scrollbar-width:none;}
+.global-bar{margin:4px 16px 16px;background:var(--card);border:1px solid var(--border);border-radius:14px;padding:10px 14px;display:flex;flex-wrap:wrap;gap:0;overflow-x:auto;scrollbar-width:none;}
 .global-bar::-webkit-scrollbar{display:none;}
 .gi{display:flex;flex-direction:column;gap:2px;min-width:fit-content;padding:0 12px;}
 .gi:first-child{padding-left:0;}
@@ -51,7 +51,9 @@ body{font-family:'DM Sans',sans-serif;color:var(--text);display:flex;justify-con
 .gi-val{font-size:13px;font-weight:500;font-family:'JetBrains Mono',monospace;}
 .gi-val.up{color:var(--green);}
 .gi-val.dn{color:var(--red);}
+.gi-val.na{color:var(--text3);}
 .gi-divider{width:1px;background:var(--border2);flex-shrink:0;align-self:stretch;}
+.global-note{width:100%;margin-top:10px;padding-top:8px;border-top:1px solid var(--border2);font-size:10px;color:var(--text3);line-height:1.5;}
 .sec-label{font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.8px;margin:16px 16px 10px;}
 .schedule-card{margin:0 16px 16px;background:var(--card);border:1px solid var(--border);border-radius:16px;padding:12px 14px;}
 .status-banner{display:none;margin:0 16px 16px;border-radius:14px;border:1px solid var(--border);padding:11px 13px;font-size:12px;line-height:1.5;color:var(--text2);background:var(--card);}
@@ -1736,15 +1738,30 @@ function renderGlobalBar(data) {
   if (!root) return;
   var global = data && data.global ? data.global : {};
   var fii = data && data.fii_dii ? data.fii_dii : {};
+  var hasUsdInr = global.usdinr && typeof global.usdinr.value === 'number';
+  var hasSp500 = global.sp500 && typeof global.sp500.change_pct === 'number';
+  var hasNasdaq = global.nasdaq && typeof global.nasdaq.change_pct === 'number';
+  var hasFii = typeof fii.fii_net_cr === 'number' && !!fii.date;
   var items = [
-    { label: 'USD/INR', value: global.usdinr ? formatRupee(global.usdinr.value).replace('₹', '') : 'N/A', cls: 'dn' },
-    { label: 'S&P 500', value: global.sp500 ? ((global.sp500.change_pct >= 0 ? '▲ ' : '▼ ') + global.sp500.change_pct.toFixed(2) + '%') : 'N/A', cls: global.sp500 && global.sp500.change_pct >= 0 ? 'up' : 'dn' },
-    { label: 'Nasdaq', value: global.nasdaq ? ((global.nasdaq.change_pct >= 0 ? '▲ ' : '▼ ') + global.nasdaq.change_pct.toFixed(2) + '%') : 'N/A', cls: global.nasdaq && global.nasdaq.change_pct >= 0 ? 'up' : 'dn' },
-    { label: 'FII Flow', value: typeof fii.fii_net_cr === 'number' ? ((fii.fii_net_cr >= 0 ? '+' : '−') + '₹' + Math.abs(fii.fii_net_cr).toLocaleString('en-IN') + ' Cr') : 'N/A', cls: fii.fii_net_cr >= 0 ? 'up' : 'dn' }
+    { label: 'USD/INR', value: hasUsdInr ? formatRupee(global.usdinr.value).replace('₹', '') : 'N/A', cls: hasUsdInr ? 'dn' : 'na' },
+    { label: 'S&P 500', value: hasSp500 ? ((global.sp500.change_pct >= 0 ? '▲ ' : '▼ ') + global.sp500.change_pct.toFixed(2) + '%') : 'N/A', cls: hasSp500 ? (global.sp500.change_pct >= 0 ? 'up' : 'dn') : 'na' },
+    { label: 'Nasdaq', value: hasNasdaq ? ((global.nasdaq.change_pct >= 0 ? '▲ ' : '▼ ') + global.nasdaq.change_pct.toFixed(2) + '%') : 'N/A', cls: hasNasdaq ? (global.nasdaq.change_pct >= 0 ? 'up' : 'dn') : 'na' },
+    { label: 'FII Flow', value: hasFii ? ((fii.fii_net_cr >= 0 ? '+' : '−') + '₹' + Math.abs(fii.fii_net_cr).toLocaleString('en-IN') + ' Cr') : 'N/A', cls: hasFii ? (fii.fii_net_cr >= 0 ? 'up' : 'dn') : 'na' }
   ];
+  var noteBits = [];
+  if (hasUsdInr && global.usdinr.as_of) noteBits.push('USD/INR ' + global.usdinr.as_of);
+  if (hasSp500 && global.sp500.as_of) noteBits.push('S&P 500 ' + global.sp500.as_of);
+  if (hasNasdaq && global.nasdaq.as_of) noteBits.push('Nasdaq ' + global.nasdaq.as_of);
+  if (hasFii) noteBits.push('FII/DII ' + fii.date);
+  var missing = [];
+  if (!hasSp500 || !hasNasdaq) missing.push('US indices unavailable');
+  if (!hasFii) missing.push('FII/DII unavailable');
+  if (!hasUsdInr) missing.push('USD/INR unavailable');
+  var note = noteBits.join(' · ');
+  if (missing.length) note += (note ? ' · ' : '') + missing.join(' · ');
   root.innerHTML = items.map(function(item, index) {
     return '<div class="gi"><div class="gi-label">' + escapeHtml(item.label) + '</div><div class="gi-val ' + item.cls + '">' + escapeHtml(item.value) + '</div></div>' + (index < items.length - 1 ? '<div class="gi-divider"></div>' : '');
-  }).join('');
+  }).join('') + (note ? '<div class="global-note">' + escapeHtml(note) + '</div>' : '');
 }
 
 function renderPortfolio(data, options) {

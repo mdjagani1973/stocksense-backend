@@ -71,6 +71,19 @@ def _reject(ticker: str, reason: str, **details):
     return None
 
 
+def _latest_market_date(df) -> str:
+    """Return the latest trading-session date represented in the OHLCV data."""
+    try:
+        if df is None or getattr(df, "empty", True):
+            return datetime.now(IST).strftime("%Y-%m-%d")
+        latest = df.index.max()
+        if hasattr(latest, "date"):
+            return latest.date().isoformat()
+    except Exception:
+        pass
+    return datetime.now(IST).strftime("%Y-%m-%d")
+
+
 def compute_composite_score(tech, pattern, sentiment, fund, fii_data):
     w = WEIGHTS
     sent_raw = {"positive": 0.8, "neutral": 0.4, "negative": 0.1}.get(
@@ -404,7 +417,7 @@ def analyse_stock(
             atr_pct=round(atr_pct, 2),
             strategy=strategy,
             created_at=datetime.now(IST).isoformat(),
-            date=datetime.now(IST).strftime("%Y-%m-%d"),
+            date=_latest_market_date(df),
         )
         logger.info(
             "Accept %s: strategy=%s direction=%s confidence=%s composite=%.3f tech=%.3f pattern=%.3f rr=%.1f sector=%s",
